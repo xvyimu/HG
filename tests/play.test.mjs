@@ -63,6 +63,11 @@ test("字段名完全陌生且地址不带 .m3u8 → 返回空，交给上层兜
   assert.equal(pickPlayUrl({ play_2027: "https://cdn.x/play?id=1" }), "");
 });
 
+test("新版 playback 响应的 streams.main 优先", () => {
+  assert.equal(pickPlayUrl({ streams: { main: M3U8, hevc: "https://x/h.m3u8" } }), M3U8);
+  assert.equal(pickPlayUrl({ streams: { main: "" }, video_url: "https://x/v.m3u8" }), "https://x/v.m3u8");
+});
+
 test("诊断日志里的 auth_key 被打码", () => {
   const r = playFieldReport({ video_url: M3U8 });
   assert.ok(!r.includes("1793700503"));

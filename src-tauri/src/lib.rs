@@ -1,4 +1,6 @@
 mod api;
+mod edge;
+mod edge_routes;
 mod media;
 mod net;
 mod session;
@@ -13,6 +15,10 @@ pub fn run() {
         .setup(|app| {
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&dir);
+                /* 调试用代理：app_data/proxy.txt 写 http://127.0.0.1:7890 即走代理 */
+                if let Ok(p) = std::fs::read_to_string(dir.join("proxy.txt")) {
+                    net::set_proxy(p.trim());
+                }
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }

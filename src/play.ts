@@ -28,6 +28,16 @@ export function pickPlayUrl(data: unknown): string {
   if (!data || typeof data !== "object") return "";
   const obj = data as Record<string, unknown>;
 
+  /* 新版播放接口：{ streams: { main, hevc, preview } } */
+  const streams = obj.streams;
+  if (streams && typeof streams === "object") {
+    const s = streams as Record<string, unknown>;
+    for (const k of ["main", "hevc", "preview"]) {
+      const v = s[k];
+      if (isM3u8(v) || isHttp(v)) return v as string;
+    }
+  }
+
   for (const k of PLAY_KEYS) {
     const v = obj[k];
     if (isHttp(v)) return v;

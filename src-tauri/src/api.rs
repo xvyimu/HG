@@ -194,9 +194,23 @@ pub async fn api_video(state: State<'_, Api>, id: i64) -> Result<Value, String> 
 
 #[tauri::command]
 pub async fn api_play(state: State<'_, Api>, id: i64, ep: u32) -> Result<Value, String> {
-    state
-        .get(&format!("/api/videos/{id}/play?ep={ep}&page_texts=0"))
-        .await
+    /* 2026-11 起官方改用 POST /api/videos/{id}/episodes/{ep}/playback，
+       返回 { streams: { main, hevc, preview }, cdn: {...} }；
+       旧 GET /play 仍回 200 但 video_url 恒为空，只留作兜底 */
+    let token = state.token();
+    match edge(
+        "POST",
+        &format!("/api/videos/{id}/episodes/{ep}/playback"),
+        None,
+        token.as_deref(),
+    )
+    .await
+    {
+        Ok(v) if !v.is_null() => Ok(v),
+        Ok(_) | Err(_) => state
+            .get(&format!("/api/videos/{id}/play?ep={ep}&page_texts=0"))
+            .await,
+    }
 }
 
 /* ───────────────────────── 评论 / 互动 ───────────────────────── */

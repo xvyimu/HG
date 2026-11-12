@@ -24,3 +24,6 @@ Thumbs.db
 *.pem
 .env
 .env.*
+# 本地过程记录与出包产物，不进 git
+docs/session/
+dist-apk/

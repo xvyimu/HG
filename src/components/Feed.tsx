@@ -702,6 +702,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               {/* 右侧操作栏 */}
               {!fs && (
               <div className={`absolute z-20 flex flex-col items-center ${isDesktop ? "desktop-social" : "right-3"}`}
+                onPointerDown={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}
                 style={isDesktop ? undefined : { bottom: `calc(var(--sab, 0px) + ${bottomInset + 104}px)` }}>
                 {isDesktop && (
                   <div className="desktop-browse-inline">
@@ -896,6 +897,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       {/* 移动端：全屏入口 */}
       {!isDesktop && !fs && (
         <button onClick={() => setFs(true)} aria-label="全屏"
+          onPointerDown={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}
           className="absolute right-4 z-20 w-9 h-9 rounded-full bg-black/45 flex items-center justify-center text-white/90 pressable elev-1"
           style={{ bottom: bottomInset + 56 }}>
           <IExpand size={17} />
@@ -906,6 +908,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       {!isDesktop && fs && (
         <>
           <button onClick={() => setFs(false)} aria-label="退出全屏"
+            onPointerDown={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}
             className="absolute right-3 z-40 w-9 h-9 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center text-white pressable elev-1"
             style={{ top: "calc(var(--sat, 0px) + 6px)" }}>
             <ICompress size={18} />

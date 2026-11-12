@@ -128,6 +128,24 @@ jobs:
       - name: 生成 Android 工程
         run: pnpm tauri android init --ci
 
+      # HyperOS: NativeLibraryHelper 对未压缩 .so 做 hole-punch 失败后，
+      # MIUI 的 assertCallerAndPackage 抛 INSTALL_FAILED_USER_RESTRICTED "Invalid apk"。
+      # 让 jniLibs 走压缩打包（extractNativeLibs=true）即可绕过。
+      - name: Use legacy jniLibs packaging
+        run: |
+          F=src-tauri/gen/android/app/build.gradle.kts
+          cat >> "$F" <<'GRADLE'
+
+          android {
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
+          }
+          GRADLE
+          grep -n useLegacyPackaging "$F"
+
       - name: 编译 APK（按 ABI 分包）
         run: pnpm tauri android build --apk --split-per-abi --target aarch64 armv7 x86_64
 

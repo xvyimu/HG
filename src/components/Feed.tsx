@@ -99,8 +99,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const detail = details[curId];
   const episodes = detail?.episodes || [];
   const savedEp = curId ? store.pos[String(curId)] : undefined;
-  /** 从「我的·观看记录」或首页进来时，直接回到上次看到的那一集（看过 10s 以上、且该集仍在列表里才算） */
-  const savedEpOk = savedEp && savedEp.t >= 10 && (!episodes.length || episodes.some((e) => e.ep_num === savedEp.ep));
+  /** 从「我的·观看记录」或首页进来时，直接回到上次看到的那一集（看过 10s 以上或非第一集，且该集仍在列表里） */
+  const savedEpOk = savedEp && (savedEp.t >= 10 || savedEp.ep > 1) && (!episodes.length || episodes.some((e) => e.ep_num === savedEp.ep));
   const curEp = epMap[curId] || (savedEpOk ? savedEp.ep : 0) || 1;
   const playKey = `${curId}:${curEp}`;
   /** 播放地址缓存：带 auth_key 时效，过期前 5 分钟自动重取 */

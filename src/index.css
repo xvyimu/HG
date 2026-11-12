@@ -418,7 +418,7 @@ input[type="range"].hg-range::-webkit-slider-thumb { -webkit-appearance: none; w
 .player-root.is-idle .desktop-browse-inline { opacity: 0; pointer-events: none; }
 
 /* —— 进度条 —— */
-.desktop-seek { position: relative; height: 19px; display: flex; align-items: center; cursor: pointer; }
+.desktop-seek { position: relative; height: 28px; display: flex; align-items: center; cursor: pointer; }
 .desktop-seek-track {
   pointer-events: none; position: absolute; height: 2px; inset: auto 0;
   background: rgba(255,255,255,.16); border-radius: 2px; overflow: hidden; transition: height .16s;
@@ -428,7 +428,27 @@ input[type="range"].hg-range::-webkit-slider-thumb { -webkit-appearance: none; w
 .desktop-seek:hover .desktop-seek-track, .desktop-seek:focus-within .desktop-seek-track { height: 4px; }
 .desktop-seek > input {
   -webkit-appearance: none; appearance: none; position: absolute; inset: 0;
-  width: 100%; height: 19px; background: transparent; margin: 0; cursor: pointer; opacity: 0;
+  width: 100%; height: 28px; background: transparent; margin: 0; cursor: pointer;
+  outline: none;
+}
+/* 默认轨道整块透明，只当 28px 命中区；视觉仍由上面自绘的 2px 细条承担 */
+.desktop-seek > input::-webkit-slider-runnable-track {
+  height: 28px; background: transparent; border: 0;
+}
+.desktop-seek > input::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; margin-top: 7.5px; border: 0; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 3px rgba(0,0,0,.30), 0 0 10px var(--p-glow);
+  transition: transform .12s ease;
+}
+.desktop-seek > input:active::-webkit-slider-thumb { transform: scale(1.14); }
+.desktop-seek > input:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(128,187,223,.65), 0 0 10px var(--p-glow);
+}
+.desktop-seek > input::-moz-range-track { height: 28px; background: transparent; border: 0; }
+.desktop-seek > input::-moz-range-thumb {
+  width: 13px; height: 13px; border: 0; border-radius: 50%; background: #fff;
+  box-shadow: 0 0 0 3px rgba(0,0,0,.30), 0 0 10px var(--p-glow);
 }
 
 /* —— 右侧停靠面板 —— */

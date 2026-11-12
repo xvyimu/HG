@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, cover, fmt, fmtTime, mediaUrl, pickPlayUrl, playFieldReport, playUrlExpiry, platform } from "../api";
+import { api, cover, fmt, fmtTime, mediaUrl, pickPlayUrl, playFieldReport, playlist, playUrlExpiry, platform } from "../api";
 import type { Detail, Episode, Post, VideoCard } from "../types";
 import { useStore } from "../store";
 import { Avatar, Img, Sheet } from "./ui";
@@ -31,7 +31,7 @@ const stripHtml = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, "
 
 export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind = "video", active, bottomInset, onBack, onNearEnd }: Props) {
   const store = useStore();
-  const { isLiked, isFav, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, muted, setMuted, volume, setVolume, toast, addHistory, user, setLoginOpen } = store;
+  const { isLiked, isFav, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, muted, setMuted, volume, setVolume, toast, addHistory, user } = store;
   const isDesktop = platform === "windows";
 
   const boxRef = useRef<HTMLDivElement>(null);
@@ -97,7 +97,9 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   const curId = videoIds[index];
   const detail = details[curId];
-  const curEp = epMap[curId] || 1;
+  const savedEp = curId ? store.pos[String(curId)] : undefined;
+  /** 从「我的·观看记录」或首页进来时，直接回到上次看到的那一集（看过 10s 以上才算） */
+  const curEp = epMap[curId] || (savedEp && savedEp.t >= 10 ? savedEp.ep : 0) || 1;
   const playKey = `${curId}:${curEp}`;
   /** 播放地址缓存：带 auth_key 时效，过期前 5 分钟自动重取 */
   const playCache = useRef<Record<string, { url: string; exp: number }>>({});
@@ -226,9 +228,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   }, []);
 
   /* 拉播放地址 */
+  const t0Ref = useRef<Record<string, number>>({});
   useEffect(() => {
     if (!curId) return undefined;
     const key = playKey;
+    if (!t0Ref.current[key]) t0Ref.current[key] = performance.now();
     const hit = playCache.current[key];
     if (hit && hit.exp - Date.now() / 1000 > 300) {
       setPlayUrls((m) => (m[key] === hit.url ? m : { ...m, [key]: hit.url }));
@@ -267,12 +271,17 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     return () => { alive = false; };
   }, [curId, curEp, playKey, kind, post?.video_url, fetchPlay, addHistory, user, detail?.video_url, detail?.video_url_hevc]);
 
-  /* 预取下一集地址（只调接口，不预载视频） */
+  /* 预取下一集地址（只调接口，不预载视频）；顺带把下一集的 m3u8 拉进 Rust 缓存，
+     切集时清单和 DNS/TLS 都是热的，起播快一截 */
   useEffect(() => {
     if (!playUrl || !curId) return undefined;
     const nx = episodes.find((e) => e.ep_num === curEp + 1);
     if (!nx) return undefined;
-    const timer = window.setTimeout(() => { void fetchPlay(curId, nx.ep_num).catch(() => {}); }, 1500);
+    const timer = window.setTimeout(() => {
+      void fetchPlay(curId, nx.ep_num)
+        .then((u) => { if (u) void fetch(playlist(u)).catch(() => {}); })
+        .catch(() => {});
+    }, 1500);
     return () => window.clearTimeout(timer);
   }, [playUrl, curId, curEp, episodes, fetchPlay]);
 
@@ -509,21 +518,20 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     } catch { toast("画中画开启失败", "info"); }
   };
 
-  const requireLogin = () => { if (!user) { setLoginOpen(true); return false; } return true; };
-
+  /* 喜欢 / 收藏 / 关注 都是本地状态，登录了才顺手同步到服务器；不再弹登录框 */
   const onLike = () => {
     if (!curId) return;
     const on = toggleLikeLocal(curId);
     setHeartBurst((n) => n + 1);
     toast(on ? "已加入喜欢" : "已取消喜欢", on ? "heart" : "info");
-    if (requireLogin()) { if (kind === "post") api.postLike(curId, on).catch(() => {}); else api.like(curId, curEp, on).catch(() => {}); }
+    if (user) { if (kind === "post") api.postLike(curId, on).catch(() => {}); else api.like(curId, curEp, on).catch(() => {}); }
   };
 
   const onFav = () => {
     if (!curId) return;
     const on = toggleFavLocal(curId);
     toast(on ? "已收藏" : "已取消收藏", on ? "star" : "info");
-    if (requireLogin()) { if (kind === "post") api.postCollect(curId, on).catch(() => {}); else api.collect(curId, on).catch(() => {}); }
+    if (user) { if (kind === "post") api.postCollect(curId, on).catch(() => {}); else api.collect(curId, on).catch(() => {}); }
   };
 
   const onFollow = () => {
@@ -531,7 +539,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     if (!uid) return;
     const on = toggleFollowLocal(uid);
     toast(on ? `已关注 ${detail?.author?.name}` : "已取消关注", on ? "ok" : "info");
-    if (requireLogin()) api.follow(uid, on).catch(() => {});
+    if (user) api.follow(uid, on).catch(() => {});
   };
 
   const pickEp = (ep: number) => {
@@ -622,7 +630,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   onTime={saveProgress}
                   onDuration={onDuration}
                   onSize={(w, h) => setVsize({ w, h })}
-                  onPlaying={() => { setPaused(false); setWaiting(false); }}
+                  onPlaying={() => {
+            setPaused(false); setWaiting(false);
+            const t0 = t0Ref.current[playKey];
+            if (t0) { delete t0Ref.current[playKey]; void api.debugLog(`play-first-frame ${playKey} ${Math.round(performance.now() - t0)}ms`); }
+          }}
                   onPause={() => setPaused(true)}
                   onWaiting={() => setWaiting(true)}
                   onEnded={() => { const next = episodes.find((e) => e.ep_num === curEp + 1); if (next) pickEp(next.ep_num); }}
@@ -843,16 +855,16 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         </div>
       )}
 
-      {/* 移动端进度条：22px 热区，可拖动 */}
+      {/* 移动端进度条：28px 热区（视觉仍是细条，只向上长出透明抓取区），可拖动 */}
       {!isDesktop && (
         <div ref={barRef} className="absolute inset-x-0 z-30"
-          style={{ bottom: fs ? "calc(var(--sab, 0px) + 52px)" : bottomInset - 2, height: 22, touchAction: "none" }}
+          style={{ bottom: fs ? "calc(var(--sab, 0px) + 52px)" : bottomInset - 2, height: 28, touchAction: "none" }}
           onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
           <div className={`absolute inset-x-0 bottom-[6px] transition-all duration-150 ${barPct !== null || fs ? "h-[5px]" : "h-[2.5px]"} bg-white/20`}>
             <div className="h-full relative"
               style={{ width: `${barProgress * 100}%`, background: barPct !== null ? "var(--p-primary)" : "rgba(255,255,255,.92)", transition: barPct !== null ? "none" : "width .25s linear" }}>
-              <span className="absolute right-[-5px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-white elev-1"
-                style={{ boxShadow: "0 0 10px var(--p-glow)" }} />
+              <span className="absolute right-[-6px] top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white elev-1"
+                style={{ boxShadow: "0 0 10px var(--p-glow), 0 1px 3px rgba(0,0,0,.45)" }} />
             </div>
           </div>
           {barPct !== null && (

@@ -1,18 +1,22 @@
 import { useEffect, useState } from "react";
-import { api, cover, fmt, platform } from "../api";
-import type { Detail, User } from "../types";
+import { api, platform } from "../api";
+import type { Detail } from "../types";
 import { useStore } from "../store";
 import { Avatar, Empty, Img, Modal, Toggle } from "../components/ui";
-import { IBroom, IChevR, IClock, IHeart, IInfo, ILink, ILogout, IMoon, IStar, ISun, IUser, IUserF } from "../icons";
+import { IBroom, IChevR, IClock, IInfo, ILink, IMoon, IStar, ISun, IUser } from "../icons";
+
+/** 断点秒数 → mm:ss；超过 1 小时用 h:mm:ss */
+function fmtPos(t: number) {
+  const total = Math.max(0, Math.floor(t || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
 
 export default function Profile({ wide }: { wide: boolean }) {
-  const { user, setUser, loginOpen, setLoginOpen, logout, theme, setTheme, history, favs, clearHistory, clearLocal, push, toast } = useStore();
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const { theme, setTheme, history, favs, clearHistory, clearLocal, push, toast, pos } = useStore();
   const [tab, setTab] = useState<"fav" | "history">("fav");
   const [cards, setCards] = useState<Detail[]>([]);
   const [about, setAbout] = useState(false);
@@ -35,83 +39,6 @@ export default function Profile({ wide }: { wide: boolean }) {
     return () => { alive = false; };
   }, [ids.join(",")]);
 
-  const submit = async () => {
-    if (!username.trim() || !password) { setErr("请输入账号与密码"); return; }
-    setBusy(true);
-    setErr("");
-    try {
-      const res = mode === "login"
-        ? await api.login(username.trim(), password)
-        : await api.register(username.trim(), password, email.trim());
-      setUser(res.user as User);
-      setPassword("");
-      setLoginOpen(false);
-      toast(mode === "login" ? `欢迎回来，${(res.user as User)?.nickname || username}` : "注册成功", "ok");
-    } catch (e) {
-      setErr((e as Error).message || "操作失败");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /* 未登录：登录卡片 */
-  if (!user) {
-    return (
-      <div className="absolute inset-0 bg-bg flex flex-col">
-        <div className="shrink-0 px-4 pb-1" style={{ paddingTop: "calc(var(--sat, 0px) + 14px)" }}>
-          <div className="text-[24px] font-bold text-on leading-none">我的</div>
-          <div className="text-[11px] text-mut mt-1.5">登录后可同步点赞、收藏与评论</div>
-        </div>
-
-        <div className="flex-1 scroll-y px-4 pt-3 pb-24">
-          <div className="rounded-(--r-lg) bg-s1 p-5 elev-1 a-rise">
-            <div className="flex items-center gap-3">
-              <Avatar size={52} icon={<IUser size={24} />} hue={220} />
-              <div className="flex-1">
-                <div className="text-[15px] font-bold text-on">{mode === "login" ? "登录 HGhub" : "注册 HGhub"}</div>
-                <div className="text-[10.5px] text-mut mt-0.5">{mode === "login" ? "账号密码登录，与官网同源" : "注册后可在多端同步"}</div>
-              </div>
-            </div>
-
-            <div className="flex bg-s3 rounded-(--r-ctl) p-1 mt-4">
-              {([["login", "登录"], ["register", "注册"]] as const).map(([k, l]) => (
-                <button key={k} onClick={() => { setMode(k); setErr(""); }}
-                  className={`flex-1 h-8 rounded-(--r-ctl) text-[12px] font-semibold pressable ${mode === k ? "bg-primary text-on-primary" : "text-mut"}`}>{l}</button>
-              ))}
-            </div>
-
-            <div className="mt-3.5 flex flex-col gap-2.5">
-              <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="账号（4-20 位字母/数字/下划线）"
-                className="h-10 px-3.5 rounded-(--r-sm) bg-s3 text-[13px] text-on placeholder-dim outline-none focus:bg-s4" />
-              <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="密码（6-20 位）"
-                onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-                className="h-10 px-3.5 rounded-(--r-sm) bg-s3 text-[13px] text-on placeholder-dim outline-none focus:bg-s4" />
-              {mode === "register" && (
-                <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="邮箱（可选）"
-                  className="h-10 px-3.5 rounded-(--r-sm) bg-s3 text-[13px] text-on placeholder-dim outline-none focus:bg-s4" />
-              )}
-              {err && <div className="text-[11.5px] text-danger">{err}</div>}
-              <button onClick={submit} disabled={busy}
-                className="h-10 rounded-(--r-ctl) bg-primary text-on-primary text-[13px] font-bold pressable disabled:opacity-60">
-                {busy ? "处理中…" : mode === "login" ? "登录" : "注册并登录"}
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-(--r-md) bg-s2 p-4">
-            <div className="flex items-center gap-2 text-[12.5px] font-semibold text-on"><IUserF size={15} className="text-primary" />登录能做什么</div>
-            <ul className="mt-2.5 space-y-1.5 text-[11.5px] text-mut leading-relaxed">
-              <li>· 点赞 / 收藏与官网账号同步</li>
-              <li>· 按剧集记录观看进度</li>
-              <li>· 发表评论与回复</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  /* 已登录 */
   return (
     <div className="absolute inset-0 bg-bg flex flex-col">
       <div className="shrink-0 px-4 pb-2" style={{ paddingTop: "calc(var(--sat, 0px) + 14px)" }}>
@@ -119,27 +46,24 @@ export default function Profile({ wide }: { wide: boolean }) {
       </div>
 
       <div className="flex-1 scroll-y px-4 pt-2 pb-24">
-        {/* 资料卡 */}
+        {/* 本地资料卡 */}
         <div className="rounded-(--r-lg) bg-s1 p-4 elev-1 flex items-center gap-3.5 a-rise">
-          <Avatar size={56} name={user.nickname} hue={280} ring />
+          <Avatar size={56} icon={<IUser size={24} />} hue={280} />
           <div className="flex-1 min-w-0">
-            <div className="text-[16px] font-bold text-on truncate">{user.nickname}</div>
-            <div className="text-[11px] text-mut mt-0.5">@{user.username} · ID {user.id}</div>
-            <div className="flex gap-3 mt-2 text-[10.5px] text-mut">
-              <span>点赞 <b className="text-on">{fmt(user.counts?.like)}</b></span>
-              <span>收藏 <b className="text-on">{fmt(user.counts?.collect)}</b></span>
-              <span>关注 <b className="text-on">{fmt(user.counts?.following)}</b></span>
+            <div className="text-[16px] font-bold text-on">本机</div>
+            <div className="text-[11px] text-mut mt-0.5">收藏和进度只存在这台设备上</div>
+            <div className="flex items-center gap-2 mt-2 text-[10.5px] text-mut">
+              <span>收藏 <b className="text-on tabular-nums">{favs.length}</b></span>
+              <span className="text-dim">·</span>
+              <span>观看 <b className="text-on tabular-nums">{history.length}</b></span>
             </div>
           </div>
-          <button onClick={async () => { await logout(); }}
-            className="w-9 h-9 rounded-full bg-s3 flex items-center justify-center text-mut pressable" aria-label="退出登录">
-            <ILogout size={17} />
-          </button>
+          <span className="shrink-0 h-6 px-2 inline-flex items-center rounded-full bg-s3 text-[10px] text-mut">无需登录</span>
         </div>
 
         {/* 我的内容 */}
         <div className="flex bg-s3 rounded-(--r-ctl) p-1 mt-4">
-          {([["fav", "我的收藏"], ["history", "观看历史"]] as const).map(([k, l]) => (
+          {([["fav", "收藏"], ["history", "观看记录"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)}
               className={`flex-1 h-8 rounded-(--r-ctl) text-[12px] font-semibold pressable ${tab === k ? "tonal text-on-sec" : "text-mut"}`}
               style={tab === k ? { background: "var(--p-sec)", color: "var(--p-primary)" } : undefined}>{l}</button>
@@ -150,25 +74,33 @@ export default function Profile({ wide }: { wide: boolean }) {
           {loading ? (
             <div className="flex justify-center py-8"><div className="w-7 h-7 spinner" /></div>
           ) : cards.length ? (
-            <div className="grid grid-cols-3 gap-2">
-              {cards.map((c) => (
-                <button key={c.id} onClick={() => push({ kind: "feed", videoIds: cards.map((x) => x.id), index: cards.findIndex((x) => x.id === c.id), title: tab === "fav" ? "我的收藏" : "观看历史" })}
-                  className="relative rounded-(--r-sm) overflow-hidden bg-s1 elev-1 pressable" style={{ paddingTop: "133%" }}>
-                  <Img src={c.cover} />
-                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent p-1.5">
-                    <div className="text-[10.5px] text-white clamp-2 leading-tight">{c.title}</div>
-                  </div>
-                </button>
-              ))}
+            <div className={`grid gap-2 ${wide ? "grid-cols-4 xl:grid-cols-5" : "grid-cols-3"}`}>
+              {cards.map((c) => {
+                const at = tab === "history" ? pos[String(c.id)] : undefined;
+                return (
+                  <button key={c.id} onClick={() => push({ kind: "feed", videoIds: cards.map((x) => x.id), index: cards.findIndex((x) => x.id === c.id), title: tab === "fav" ? "我的收藏" : "观看历史" })}
+                    className="relative rounded-(--r-sm) overflow-hidden bg-s1 elev-1 pressable" style={{ paddingTop: "133%" }}>
+                    <Img src={c.cover} />
+                    {at && (
+                      <span className="absolute top-1.5 right-1.5 max-w-[calc(100%-12px)] px-1.5 py-0.5 rounded-md bg-black/55 backdrop-blur-sm text-[9px] font-semibold text-white/90 tabular-nums whitespace-nowrap truncate">
+                        第 {at.ep} 集 · {fmtPos(at.t)}
+                      </span>
+                    )}
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent p-1.5">
+                      <div className="text-[10.5px] text-white clamp-2 leading-tight">{c.title}</div>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-          ) : (
-            <Empty icon={tab === "fav" ? <IStar size={24} /> : <IClock size={24} />}
-              title={tab === "fav" ? "还没有收藏" : "还没有观看记录"}
-              sub={tab === "fav" ? "在剧集页点收藏，之后就能在这里找到" : "看过的剧集会出现在这里"}
+          ) : tab === "fav" ? (
+            <Empty icon={<IStar size={24} />} title="还没有收藏" sub="在播放页点收藏"
               action="去逛逛" onAction={() => push({ kind: "ranks" })} />
+          ) : (
+            <Empty icon={<IClock size={24} />} title="还没有观看记录" />
           )}
           {cards.length > 0 && tab === "history" && (
-            <button onClick={clearHistory} className="mt-3 w-full h-9 rounded-(--r-ctl) bg-s3 text-[12px] text-mut pressable">清空观看历史</button>
+            <button onClick={clearHistory} className="mt-3 w-full h-9 rounded-(--r-ctl) bg-s3 text-[12px] text-mut pressable">清空观看记录</button>
           )}
         </div>
 
@@ -181,13 +113,6 @@ export default function Profile({ wide }: { wide: boolean }) {
               <div className="text-[10.5px] text-mut">跟随设计稿的 Fluent 深色</div>
             </div>
             <Toggle on={theme === "dark"} onChange={(on) => setTheme(on ? "dark" : "light")} label="深色外观" />
-          </div>
-          <div className="flex items-center gap-3 px-3.5 py-3">
-            <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><IHeart size={16} /></span>
-            <div className="flex-1">
-              <div className="text-[12.5px] text-on">本地喜欢</div>
-              <div className="text-[10.5px] text-mut">{favs.length} 部收藏 · {history.length} 条观看记录</div>
-            </div>
           </div>
         </div>
 
@@ -256,7 +181,7 @@ export default function Profile({ wide }: { wide: boolean }) {
           <div className="p-5">
             <div className="text-[14.5px] font-bold text-on">清理缓存</div>
             <p className="text-[12px] text-mut leading-relaxed mt-2">
-              将清除封面与播放列表缓存、喜欢与收藏标记、观看历史和搜索历史。账号登录状态会保留。
+              将清除封面与播放列表缓存、收藏与观看记录、播放断点和搜索历史。此操作不可撤销。
             </p>
             <div className="flex gap-2 mt-5">
               <button onClick={() => setClearOpen(false)} className="flex-1 h-9 rounded-(--r-ctl) bg-s3 text-[12.5px] text-on/80 pressable">取消</button>

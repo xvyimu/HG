@@ -139,9 +139,30 @@ fn rewrite_uri_attr(line: &str, prefix: &str) -> String {
     line.to_string()
 }
 
+/// 播放列表缓存键：去掉每次都会变的签名参数，重看同一集不必重新拉 m3u8
+fn stable_key(url: &str) -> String {
+    let (base, q) = match url.split_once('?') {
+        Some((b, q)) => (b, q),
+        None => return url.to_string(),
+    };
+    let keep: Vec<&str> = q
+        .split('&')
+        .filter(|kv| {
+            let k = kv.split('=').next().unwrap_or("");
+            !matches!(k, "auth_key" | "time" | "v" | "via" | "via_bm" | "via_m" | "t" | "ts")
+        })
+        .collect();
+    if keep.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", keep.join("&"))
+    }
+}
+
 /// 取 m3u8 并把 key / 分片地址改写到本地协议。
 pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, String> {
-    if let Some(hit) = PL_CACHE.lock().unwrap().get(url).cloned() {
+    let key = stable_key(url);
+    if let Some(hit) = PL_CACHE.lock().unwrap().get(&key).cloned() {
         return Ok(hit);
     }
     let (_, bytes) = fetch_bytes(url).await?;
@@ -170,7 +191,7 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
     }
 
     let arc = Arc::new(out);
-    cache_put(&PL_CACHE, url.to_string(), arc.clone(), PL_CACHE_MAX);
+    cache_put(&PL_CACHE, key, arc.clone(), PL_CACHE_MAX);
     Ok(arc)
 }
 
@@ -257,9 +278,14 @@ mod tests {
     #[tokio::test]
     async fn live_play_chain() {
         use crate::net::edge;
-        let play = edge("GET", "/api/videos/117/play?ep=3&page_texts=0", None, None).await
+        /* 2026-11：取址改走 POST /episodes/{ep}/playback，返回 streams.main */
+        let play = edge("POST", "/api/videos/117/episodes/3/playback", None, None)
+            .await
             .expect("play api");
-        let url = play["video_url"].as_str().expect("video_url").to_string();
+        let url = play["streams"]["main"]
+            .as_str()
+            .expect("streams.main")
+            .to_string();
         println!("play url: {}", &url[..url.len().min(90)]);
         let (_, bytes) = fetch_bytes(&url).await.expect("fetch playlist");
         let text = String::from_utf8_lossy(&bytes);

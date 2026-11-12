@@ -180,7 +180,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const addHistory = useCallback((id: number) => {
     setP((s) => ({ ...s, history: [id, ...s.history.filter((x) => x !== id)].slice(0, 80) }));
   }, []);
-  const clearHistory = useCallback(() => setP((s) => ({ ...s, history: [] })), []);
+  const clearHistory = useCallback(() => setP((s) => ({ ...s, history: [], pos: {} })), []);
   const clearLocal = useCallback(() => setP((s) => ({ ...s, likes: [], favs: [], history: [], searchHist: [], pos: {} })), []);
   const addSearch = useCallback((q: string) => {
     const t = q.trim();

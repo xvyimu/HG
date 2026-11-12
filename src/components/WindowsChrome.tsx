@@ -50,7 +50,7 @@ export function WindowsTitleBar({ collapsed, onToggle }: { collapsed: boolean; o
 }
 
 export function WindowsRail({ collapsed }: { collapsed: boolean }) {
-  const { tab, setTab, user, setLoginOpen, push } = useStore();
+  const { tab, setTab, user, push } = useStore();
   const items: { key: Tab; label: string; Icon: typeof IHome; Filled: typeof IHomeF }[] = [
     { key: "home", label: "首页", Icon: IHome, Filled: IHomeF },
     { key: "category", label: "分类", Icon: IGrid, Filled: IGridF },
@@ -80,11 +80,11 @@ export function WindowsRail({ collapsed }: { collapsed: boolean }) {
           </button>
         </div>
         <div className="win-sidebar-bottom">
-          <button className="win-account" onClick={() => { setTab("profile"); if (!user) setLoginOpen(true); }}>
+          <button className="win-account" onClick={() => setTab("profile")}>
             <Avatar size={34} hue={220} name={user?.nickname} icon={user ? undefined : <IUser size={17} />} />
             <span className="win-account-copy">
-              <strong>{user?.nickname || "登录 HGhub"}</strong>
-              <small>{user ? "你的精彩，都在这里" : "留住每一次心动"}</small>
+              <strong>{user?.nickname || "我的"}</strong>
+              <small>收藏与进度存在本机</small>
             </span>
           </button>
           <span className="win-sidebar-version">HGhub for Windows 1.0.0</span>

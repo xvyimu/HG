@@ -94,8 +94,10 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
           lowLatencyMode: false,
           startLevel: -1,
           abrEwmaDefaultEstimate: 1_200_000,
-          maxBufferLength: 24,
-          maxMaxBufferLength: 48,
+          /* 短剧单集 2~3 分钟：缓冲拉长一点，少卡顿；关掉起播带宽探测，首帧更快 */
+          testBandwidth: false,
+          maxBufferLength: 40,
+          maxMaxBufferLength: 80,
           backBufferLength: 20,
           capLevelToPlayerSize: true,
           manifestLoadingTimeOut: 20000,

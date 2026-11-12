@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, cover, fmt, fmtTime, mediaUrl, platform } from "../api";
+import { api, cover, fmt, fmtTime, mediaUrl, pickPlayUrl, playFieldReport, playUrlExpiry, platform } from "../api";
 import type { Detail, Episode, Post, VideoCard } from "../types";
 import { useStore } from "../store";
 import { Avatar, Img, Sheet } from "./ui";
@@ -48,7 +48,9 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [vsize, setVsize] = useState({ w: 0, h: 0 });
   const [buffered, setBuffered] = useState(0);
   const [paused, setPaused] = useState(false);
-  const [rate, setRate] = useState(1);
+  /** 倍速持久化在 store 里 */
+  const rate = store.rate;
+  const setRate = store.setRate;
   const [waiting, setWaiting] = useState(false);
   const [err, setErr] = useState("");
   const [panel, setPanel] = useState<"episodes" | "comments" | "article" | null>(null);
@@ -193,22 +195,99 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, index, videoIds]);
 
+  /* 播放地址缓存：带 auth_key 时效，过期前 5 分钟自动重取 */
+  const playCache = useRef<Record<string, { url: string; exp: number }>>({});
+
+  const fetchPlay = useCallback(async (id: number, ep: number, force = false): Promise<string> => {
+    const key = `${id}:${ep}`;
+    const now = Date.now() / 1000;
+    const hit = playCache.current[key];
+    if (!force && hit && hit.exp - now > 300) return hit.url;
+
+    let last: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const info = await api.play(id, ep);
+        const url = pickPlayUrl(info);
+        if (!url) {
+          const keys = info && typeof info === "object" ? Object.keys(info as object).slice(0, 10).join("/") : typeof info;
+          void api.debugLog(`play-empty id=${id} ep=${ep} attempt=${attempt} :: ${playFieldReport(info)}`);
+          last = new Error(attempt === 0 ? "暂无播放地址，正在重试…" : `站点未返回播放地址（${keys || "空响应"}）`);
+        } else {
+          playCache.current[key] = { url, exp: playUrlExpiry(url) };
+          return url;
+        }
+      } catch (e) {
+        last = e;
+        void api.debugLog(`play-fail id=${id} ep=${ep} attempt=${attempt} :: ${(e as Error).message}`);
+      }
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    throw last instanceof Error ? last : new Error("取播放地址失败");
+  }, []);
+
   /* 拉播放地址 */
   useEffect(() => {
     if (!curId) return;
-    if (playUrls[playKey]) return;
+    const key = playKey;
+    const hit = playCache.current[key];
+    if (hit && hit.exp - Date.now() / 1000 > 300) {
+      setPlayUrls((m) => (m[key] === hit.url ? m : { ...m, [key]: hit.url }));
+      return undefined;
+    }
     let alive = true;
-    api.play(curId, curEp)
-      .then((info) => {
+    const fallback = curEp === 1 ? (detail?.video_url || detail?.video_url_hevc || "") : "";
+    fetchPlay(curId, curEp)
+      .then((url) => {
         if (!alive) return;
-        if (!info?.video_url) throw new Error("暂无播放地址");
-        setPlayUrls((m) => ({ ...m, [playKey]: info.video_url }));
+        setPlayUrls((m) => ({ ...m, [key]: url }));
+        setErr("");
         addHistory(curId);
       })
-      .catch((e) => { if (alive) setErr((e as Error).message || "取播放地址失败"); });
+      .catch((e) => {
+        if (!alive) return;
+        /* 兜底：详情里 SSR 预置的第 1 集地址 */
+        if (fallback) {
+          setPlayUrls((m) => ({ ...m, [key]: fallback }));
+          setErr("");
+          addHistory(curId);
+          return;
+        }
+        setErr(user ? (e as Error).message || "取播放地址失败" : `${(e as Error).message || "取播放地址失败"} · 可尝试登录后重试`);
+      });
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curId, curEp]);
+  }, [curId, curEp, playKey, fetchPlay, addHistory, detail?.video_url, detail?.video_url_hevc]);
+
+  /* 预取下一集地址（只调接口，不预载视频） */
+  useEffect(() => {
+    if (!playUrl || !curId) return undefined;
+    const nx = episodes.find((e) => e.ep_num === curEp + 1);
+    if (!nx) return undefined;
+    const timer = window.setTimeout(() => { void fetchPlay(curId, nx.ep_num).catch(() => {}); }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [playUrl, curId, curEp, episodes, fetchPlay]);
+
+  /* 断点续播：同一部剧、同一集，上次看到 ≥10s 且未看完 → 自动接上 */
+  const resumedRef = useRef("");
+  const onDuration = useCallback((d: number) => {
+    setDuration(d);
+    if (!curId) return;
+    const saved = store.pos[String(curId)];
+    if (!saved || saved.ep !== curEp || resumedRef.current === playKey) return;
+    if (saved.t < 10 || saved.t > d - 15) return;
+    resumedRef.current = playKey;
+    videoRef.current?.seek(saved.t);
+    setTime(saved.t);
+    toast(`已从上次 ${fmtTime(saved.t)} 继续`, "info");
+  }, [curId, curEp, playKey, store.pos, toast]);
+
+  /* 进度落盘：时间每 5s 变一次，交给 store 去抖 */
+  const savePosRef = useRef(store.savePos);
+  savePosRef.current = store.savePos;
+  const saveProgress = useCallback((t: number) => {
+    setTime(t);
+    if (curId && duration > 20) savePosRef.current(curId, curEp, t);
+  }, [curId, curEp, duration]);
 
   /* 切换条目/集数时重置播放状态 */
   useEffect(() => {
@@ -449,6 +528,31 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     setPanel(null);
   };
 
+  /** 错误自愈：地址失效（auth_key 过期 / 分片全挂）时，换一条新地址重试一次 */
+  const healRef = useRef<Record<string, number>>({});
+  const onPlayError = useCallback((m: string, fatal?: boolean) => {
+    if (!curId) { setErr(m); return; }
+    if (!fatal || (healRef.current[playKey] || 0) >= 1) { setErr(m); return; }
+    healRef.current[playKey] = 1;
+    void api.debugLog(`play-heal ${playKey} :: ${m}`);
+    delete playCache.current[playKey];
+    fetchPlay(curId, curEp, true)
+      .then((url) => { setErr(""); setPlayUrls((mm) => ({ ...mm, [playKey]: url })); })
+      .catch((e) => setErr((e as Error).message || m));
+  }, [curId, curEp, playKey, fetchPlay]);
+
+  /** 「重试」按钮：强制重取地址，而不是继续用缓存里的死链 */
+  const retryPlay = () => {
+    if (!curId) return;
+    delete playCache.current[playKey];
+    healRef.current[playKey] = 0;
+    setErr("");
+    setWaiting(true);
+    fetchPlay(curId, curEp, true)
+      .then((url) => setPlayUrls((m) => ({ ...m, [playKey]: url })))
+      .catch((e) => setErr((e as Error).message || "取播放地址失败"));
+  };
+
   const likeCount = useMemo(() => {
     const base = meta.like;
     return base + (isLiked(curId) ? 1 : 0);
@@ -481,14 +585,14 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   volume={volume} rate={effRate}
                   fit={isDesktop || (vsize.w > 0 && vsize.w > vsize.h) ? "contain" : "cover"}
                   onClick={() => { if (isDesktop) videoRef.current?.toggle(); }}
-                  onTime={setTime}
-                  onDuration={setDuration}
+                  onTime={saveProgress}
+                  onDuration={onDuration}
                   onSize={(w, h) => setVsize({ w, h })}
                   onPlaying={() => { setPaused(false); setWaiting(false); }}
                   onPause={() => setPaused(true)}
                   onWaiting={() => setWaiting(true)}
                   onEnded={() => { const next = episodes.find((e) => e.ep_num === curEp + 1); if (next) pickEp(next.ep_num); }}
-                  onError={(m) => setErr(m)} />
+                  onError={onPlayError} />
                 </div>
               ) : (
                 <div className="absolute inset-0">
@@ -650,7 +754,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   <div className="bg-black/70 rounded-xl p-5 flex flex-col items-center gap-3 text-[13px] text-white/90">
                     <span>视频暂时无法加载</span>
                     <span className="text-[10.5px] text-white/45 max-w-[240px] text-center break-all">{err}</span>
-                    <button className="text-primary text-[12.5px]" onClick={() => { setErr(""); setWaiting(true); videoRef.current?.play(); }}>重试</button>
+                    <button className="text-primary text-[12.5px]" onClick={retryPlay}>重试</button>
                   </div>
                 </div>
               )}

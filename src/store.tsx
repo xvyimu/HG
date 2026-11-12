@@ -41,12 +41,17 @@ type Persist = {
   muted: boolean;
   volume: number;
   searchHist: string[];
+  /** 上次选择的倍速，跨会话保留 */
+  rate: number;
+  /** 断点续播：`id` → 上次看到的集与秒数 */
+  pos: Record<string, { ep: number; t: number }>;
 };
 
 const LS = "hghub_app_v1";
 const DEFAULTS: Persist = {
   likes: [], favs: [], history: [], follows: [],
   muted: true, volume: 0.7, searchHist: [],
+  rate: 1, pos: {},
 };
 
 function loadPersist(): Persist {
@@ -92,6 +97,11 @@ type Store = {
   fs: boolean; setFs: (v: boolean | ((p: boolean) => boolean)) => void;
   muted: boolean; setMuted: (v: boolean | ((p: boolean) => boolean)) => void;
   volume: number; setVolume: (v: number) => void;
+  /** 播放倍速（持久化） */
+  rate: number; setRate: (r: number) => void;
+  /** 断点续播位置 */
+  pos: Record<string, { ep: number; t: number }>;
+  savePos: (id: number, ep: number, t: number) => void;
   searchHist: string[]; addSearch: (q: string) => void; clearSearchHist: () => void;
   toasts: Toast[]; toast: (msg: string, icon?: Toast["icon"]) => void;
 };
@@ -196,6 +206,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const volume = Math.max(0, Math.min(1, v));
     setP((s) => ({ ...s, volume, muted: volume === 0 }));
   }, []);
+  const setRate = useCallback((r: number) => {
+    setP((s) => ({ ...s, rate: r }));
+  }, []);
+  /** 每 5 秒写一次，避免 timeupdate 把 localStorage 打爆 */
+  const savePos = useCallback((id: number, ep: number, t: number) => {
+    if (!id || !Number.isFinite(t) || t < 3) return;
+    setP((s) => {
+      const prev = s.pos[String(id)];
+      if (prev && prev.ep === ep && Math.abs(prev.t - t) < 4) return s;
+      const pos: Persist["pos"] = { ...s.pos, [String(id)]: { ep, t } };
+      const keys = Object.keys(pos);
+      /* 只留最近 120 部，避免 localStorage 无限增长 */
+      if (keys.length > 120) for (const k of keys.slice(0, keys.length - 120)) delete pos[k];
+      return { ...s, pos };
+    });
+  }, []);
 
   const value = useMemo<Store>(() => ({
     platform: envPlatform,
@@ -207,11 +233,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isFav: (id) => p.favs.includes(id),
     toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory, clearLocal,
     muted: p.muted, setMuted, volume: p.volume, setVolume, theater, setTheater, fs, setFs,
+    rate: p.rate, setRate, pos: p.pos, savePos,
     searchHist: p.searchHist, addSearch, clearSearchHist,
     toasts, toast,
   }), [theme, tab, setTab, stack, push, pop, user, loginOpen, logout,
     p, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory, clearLocal,
-    setMuted, setVolume, addSearch, clearSearchHist, toasts, toast, theater, setTheater, fs, setFs]);
+    setMuted, setVolume, setRate, savePos, addSearch, clearSearchHist, toasts, toast, theater, setTheater, fs, setFs]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

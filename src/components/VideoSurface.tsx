@@ -30,7 +30,7 @@ type Props = {
   onPause?: () => void;
   onWaiting?: () => void;
   onEnded?: () => void;
-  onError?: (msg: string) => void;
+  onError?: (msg: string, fatal?: boolean) => void;
   onClick?: () => void;
   className?: string;
 };
@@ -60,11 +60,14 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     volume: (vol: number) => { const v = videoRef.current; if (v) v.volume = vol; },
   }), []);
 
+  /** 最新回调放 ref：hls 实例只建一次，闭包不能锁死旧的 onError */
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
     setReady(false);
-    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
     const proxied = /^https?:\/\/hg\.localhost\//.test(src);
     const url = proxied ? src : playlist(src);
@@ -81,37 +84,51 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     applySettings();
 
     if (useHls && Hls.isSupported()) {
-      const hls = new Hls({
-        enableWorker: true,
-        maxBufferLength: 30,
-        backBufferLength: 30,
-        manifestLoadingTimeOut: 20000,
-        manifestLoadingMaxRetry: 3,
-        fragLoadingMaxRetry: 4,
-      });
-      hlsRef.current = hls;
+      /* 复用实例：切集只换 source，不重建 hls —— 否则每集都要重新握手、黑屏 1~2 秒、缓冲全丢 */
+      let hls = hlsRef.current;
+      if (!hls) {
+        hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+          startLevel: -1,
+          abrEwmaDefaultEstimate: 1_200_000,
+          maxBufferLength: 24,
+          maxMaxBufferLength: 48,
+          backBufferLength: 20,
+          capLevelToPlayerSize: true,
+          manifestLoadingTimeOut: 20000,
+          manifestLoadingMaxRetry: 3,
+          levelLoadingMaxRetry: 4,
+          fragLoadingMaxRetry: 4,
+          fragLoadingTimeOut: 20000,
+        });
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (autoPlay) video.play().catch(() => {});
+        });
+        hls.on(Hls.Events.ERROR, (_e, data) => {
+          if (!data.fatal) return;
+          onErrorRef.current?.(`${data.type}/${data.details}`, true);
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls?.startLoad();
+          else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls?.recoverMediaError();
+          else { hls?.destroy(); hlsRef.current = null; }
+        });
+        hls.attachMedia(video);
+        hlsRef.current = hls;
+      }
       hls.loadSource(url);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (autoPlay) video.play().catch(() => {});
-      });
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (!data.fatal) return;
-        onError?.(`${data.type}/${data.details}`);
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        else { hls.destroy(); hlsRef.current = null; }
-      });
-    } else {
-      video.src = url;
-      if (autoPlay) video.play().catch(() => {});
+      return;
     }
 
-    return () => {
-      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-    };
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    video.src = url;
+    if (autoPlay) video.play().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
+
+  /* 组件卸载才销毁实例 */
+  useEffect(() => () => {
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+  }, []);
 
   useEffect(() => { if (videoRef.current) videoRef.current.muted = muted; }, [muted]);
   useEffect(() => { if (videoRef.current) videoRef.current.volume = volume; }, [volume]);
@@ -128,6 +145,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       ref={videoRef}
       poster={poster}
       playsInline
+      preload="auto"
       loop={loop}
       onClick={onClick}
       className={`w-full h-full bg-black ${fit === "cover" ? "object-cover" : "object-contain"} ${className}`}

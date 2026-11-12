@@ -61,6 +61,8 @@ export const api = {
     call<unknown>("api_comment_send", { id, ep, text, replyId: replyId ?? null }),
 
   clearCache: () => invoke<void>("cache_clear"),
+  /** 诊断日志：写到应用数据目录 debug.log */
+  debugLog: (msg: string) => invoke<void>("debug_log", { msg }).catch(() => {}),
   postLike: (id: number, on: boolean) => invoke<unknown>("api_post_like", { id, on }),
   postCollect: (id: number, on: boolean) => invoke<unknown>("api_post_collect", { id, on }),
   postComments: (id: number, page: number, size: number) => call<CommentPage>("api_post_comments", { id, page, size }),
@@ -114,7 +116,8 @@ export async function selfTest(): Promise<string> {
   return steps.join(" | ");
 }
 
-/* ── 格式化 ─────────────────────────────────────────────── */
+/* ── 播放地址解析：见 src/play.ts（纯函数，可单测） ───────── */
+export { pickPlayUrl, playFieldReport, playUrlExpiry } from "./play";
 
 export const fmt = (n: number | undefined) => {
   const v = Number(n) || 0;

@@ -126,14 +126,48 @@ pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .gzip(true)
         .brotli(true)
         .pool_idle_timeout(Duration::from_secs(60));
-    let from_file = PROXY.read().ok().and_then(|g| g.clone());
-    if let Some(p) = from_file.or_else(|| std::env::var("HGHUB_PROXY").ok()) {
-        if let Ok(px) = reqwest::Proxy::all(&p) {
-            b = b.proxy(px);
+    /* 代理来源：setup 里读到的 app_data/proxy.txt → 环境变量 → Android 固定路径兜底 */
+    let mut chosen = PROXY.read().ok().and_then(|g| g.clone());
+    if chosen.is_none() {
+        if let Ok(p) = std::env::var("HGHUB_PROXY") {
+            chosen = Some(p);
         }
+    }
+    if chosen.is_none() {
+        if let Ok(p) = std::fs::read_to_string(ANDROID_PROXY_FILE) {
+            let p = p.trim().to_string();
+            if !p.is_empty() {
+                chosen = Some(p);
+            }
+        }
+    }
+    if let Some(p) = chosen {
+        match reqwest::Proxy::all(&p) {
+            Ok(px) => {
+                b = b.proxy(px);
+                note_proxy(&format!("proxy={p}"));
+            }
+            Err(e) => note_proxy(&format!("proxy invalid {p}: {e}")),
+        }
+    } else {
+        note_proxy("proxy=none");
     }
     b.build().expect("build http client")
 });
+
+const ANDROID_PROXY_FILE: &str = "/data/data/com.hghub.huangguo/files/proxy.txt";
+
+/// 调试留痕：CLIENT 初始化时用的代理（写不进就算了）
+fn note_proxy(msg: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/data/data/com.hghub.huangguo/files/proxy.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{msg}");
+    }
+}
 
 /// 业务请求：走加密通道
 pub async fn edge(

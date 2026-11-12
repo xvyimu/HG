@@ -41,7 +41,7 @@ export function EpisodesPanel({ videoId, episodes, current, onPick, onClose }: {
 export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
   videoId: number; ep: number; total: number; kind?: "video" | "post"; onClose: () => void;
 }) {
-  const { user, setLoginOpen, toast } = useStore();
+  const { user, toast } = useStore();
   const [items, setItems] = useState<Comment[]>([]);
   const [page, setPage] = useState(0);
   const [pages, setPages] = useState(1);
@@ -75,7 +75,7 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
   const send = async () => {
     const t = text.trim();
     if (!t) return;
-    if (!user) { setLoginOpen(true); return; }
+    if (!user) { toast("评论要黄果账号，本客户端不登录", "info"); return; }
     setSending(true);
     try {
       await api.commentSend(videoId, ep, t);
@@ -143,8 +143,7 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
         </form>
       ) : (
         <div className="shrink-0 flex items-center gap-2 px-3 py-2.5 bg-s2/70">
-          <span className="flex-1 min-w-0 text-[11.5px] text-mut">评论发送要账号；收藏和进度不需要</span>
-          <button onClick={() => setLoginOpen(true)} className="h-8 px-3 rounded-(--r-ctl) bg-s3 text-[12px] text-on pressable">登录</button>
+          <span className="flex-1 min-w-0 text-[11.5px] text-mut leading-snug">评论要黄果账号，本客户端不登录；收藏和进度已经存在这台设备上</span>
         </div>
       )}
     </div>

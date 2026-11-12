@@ -260,7 +260,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setP((s) => {
       const prev = s.pos[String(id)];
       if (prev && prev.ep === ep) return s;
-      const done = prev?.done ? { done: true } : {};
+      /* done 只表示「追到最后一集」：往回重看更早的集就作废，角标不该一直挂着「已看完」 */
+      const done = prev?.done && ep >= prev.ep ? { done: true } : {};
       return { ...s, pos: trimPos({ ...s.pos, [String(id)]: { ep, t: 0, at: Date.now(), ...done } }) };
     });
   }, []);

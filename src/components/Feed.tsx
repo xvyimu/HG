@@ -102,7 +102,17 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const episodes = detail?.episodes || [];
   const savedEp = curId ? store.pos[String(curId)] : undefined;
   /** 从「我的·观看记录」或首页进来时，直接回到上次看到的那一集（看过 10s 以上或非第一集，且该集仍在列表里） */
-  const savedEpOk = savedEp && (savedEp.t >= 10 || savedEp.ep > 1) && (!episodes.length || episodes.some((e) => e.ep_num === savedEp.ep));
+  /** 详情未就绪时先别按记住的集号发请求：等列表（最多 1.5s），否则会先取错集再翻回来 */
+  const [epGrace, setEpGrace] = useState(false);
+  useEffect(() => {
+    setEpGrace(false);
+    if (!curId || kind === "post") return undefined;
+    const id = window.setTimeout(() => setEpGrace(true), 1500);
+    return () => window.clearTimeout(id);
+  }, [curId, kind]);
+  const epResolved = kind === "post" || episodes.length > 0 || epGrace;
+  const savedEpOk = !!savedEp && (savedEp.t >= 10 || savedEp.ep > 1)
+    && (episodes.length ? episodes.some((e) => e.ep_num === savedEp.ep) : epGrace);
   const curEp = epMap[curId] || (savedEpOk ? savedEp.ep : 0) || 1;
   const playKey = `${curId}:${curEp}`;
   /** 播放地址缓存：带 auth_key 时效，过期前 5 分钟自动重取 */
@@ -234,6 +244,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const t0Ref = useRef<Record<string, number>>({});
   useEffect(() => {
     if (!curId) return undefined;
+    if (!epResolved) return undefined;
     const key = playKey;
     const hit = playCache.current[key];
     if (hit && hit.exp - Date.now() / 1000 > 300) {
@@ -276,7 +287,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         setErr((e as Error).message || "取播放地址失败");
       });
     return () => { alive = false; };
-  }, [curId, curEp, playKey, kind, post?.video_url, fetchPlay, addHistory, detail?.video_url, detail?.video_url_hevc]);
+  }, [curId, curEp, playKey, kind, epResolved, post?.video_url, fetchPlay, addHistory, detail?.video_url, detail?.video_url_hevc]);
 
   /* 预取下一集地址（只调接口，不预载视频）；顺带把下一集的 m3u8 拉进 Rust 缓存，
      切集时清单和 DNS/TLS 都是热的，起播快一截 */

@@ -50,7 +50,9 @@ export function WindowsTitleBar({ collapsed, onToggle }: { collapsed: boolean; o
 }
 
 export function WindowsRail({ collapsed }: { collapsed: boolean }) {
-  const { tab, setTab, user, push } = useStore();
+  const { tab, setTab, user, push, stack } = useStore();
+  /** 排行榜是压在 tab 之上的一层页面，高亮要跟着栈顶走，否则侧栏会一直停在「我的」 */
+  const ranksOpen = stack.length > 0 && stack[stack.length - 1].kind === "ranks";
   const items: { key: Tab; label: string; Icon: typeof IHome; Filled: typeof IHomeF }[] = [
     { key: "home", label: "首页", Icon: IHome, Filled: IHomeF },
     { key: "category", label: "分类", Icon: IGrid, Filled: IGridF },
@@ -74,8 +76,9 @@ export function WindowsRail({ collapsed }: { collapsed: boolean }) {
               <span className="win-nav-copy">{label}</span>
             </button>
           ))}
-          <button className="win-nav-item" onClick={() => push({ kind: "ranks" })}>
-            <span className="win-nav-symbol"><ITrophy size={21} strokeWidth={1.7} /></span>
+          <button className={`win-nav-item ${ranksOpen ? "is-selected" : ""}`} aria-current={ranksOpen ? "page" : undefined}
+            onClick={() => push({ kind: "ranks" })}>
+            <span className="win-nav-symbol">{ranksOpen ? <ITrophy size={21} strokeWidth={2.1} /> : <ITrophy size={21} strokeWidth={1.7} />}</span>
             <span className="win-nav-copy">排行榜</span>
           </button>
         </div>

@@ -48,6 +48,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [vsize, setVsize] = useState({ w: 0, h: 0 });
   const [buffered, setBuffered] = useState(0);
   const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
+  pausedRef.current = paused;
   /** 倍速持久化在 store 里 */
   const rate = store.rate;
   const setRate = store.setRate;
@@ -92,7 +94,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [barPct, setBarPct] = useState<number | null>(null);
   const gesture = useRef<{
     x: number; y: number; startY: number; t: number; timer: number | null;
-    mode: "idle" | "hold" | "scrub"; base: number; width: number;
+    mode: "idle" | "hold" | "scrub"; base: number; width: number; wasPaused: boolean;
   } | null>(null);
 
   const curId = videoIds[index];
@@ -389,6 +391,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     const g = {
       x: e.clientX, y: e.clientY, startY: e.clientY, t: Date.now(), base: time, width,
       mode: "idle" as "idle" | "hold" | "scrub",
+      wasPaused: pausedRef.current,
       timer: window.setTimeout(() => {
         const cur = gesture.current;
         if (!cur || cur.mode !== "idle") return;
@@ -461,7 +464,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       if (target != null) videoRef.current?.seek(target);
       setScrub(null);
       scrubTarget.current = null;
-      if (!paused) videoRef.current?.play();
+      /* 拖动前在播就继续播（用按下时的状态，避免被 scrub 期间的 pause 带偏） */
+      if (!g.wasPaused) videoRef.current?.play();
       return;
     }
     if (Date.now() - g.t < 260) videoRef.current?.toggle();
@@ -647,7 +651,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           }}
                   onPause={() => setPaused(true)}
                   onWaiting={() => setWaiting(true)}
-                  onEnded={() => { const next = episodes.find((e) => e.ep_num === curEp + 1); if (next) pickEp(next.ep_num); }}
+                  onEnded={() => {
+            if (curId) store.markDone(curId, curEp);
+            const next = episodes.find((e) => e.ep_num === curEp + 1);
+            if (next) pickEp(next.ep_num);
+          }}
                   onError={onPlayError} />
                 </div>
               ) : (

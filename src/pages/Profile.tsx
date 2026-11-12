@@ -84,7 +84,7 @@ export default function Profile({ wide }: { wide: boolean }) {
                     <Img src={c.cover} />
                     {at && (
                       <span className="absolute top-1.5 right-1.5 max-w-[calc(100%-12px)] px-1.5 py-0.5 rounded-md bg-black/55 backdrop-blur-sm text-[9px] font-semibold text-white/90 tabular-nums whitespace-nowrap truncate">
-                        第 {at.ep} 集 · {fmtPos(at.t)}
+                        {at.done ? `第 ${at.ep} 集 · 已看完` : `第 ${at.ep} 集 · ${fmtPos(at.t)}`}
                       </span>
                     )}
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent p-1.5">

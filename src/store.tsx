@@ -44,7 +44,7 @@ type Persist = {
   /** 上次选择的倍速，跨会话保留 */
   rate: number;
   /** 断点续播：`id` → 上次看到的集与秒数（`at` 用于淘汰最久未看的） */
-  pos: Record<string, { ep: number; t: number; at: number }>;
+  pos: Record<string, { ep: number; t: number; at: number; done?: boolean }>;
 };
 
 const LS = "hghub_app_v1";
@@ -100,13 +100,24 @@ type Store = {
   /** 播放倍速（持久化） */
   rate: number; setRate: (r: number) => void;
   /** 断点续播位置 */
-  pos: Record<string, { ep: number; t: number; at: number }>;
+  pos: Record<string, { ep: number; t: number; at: number; done?: boolean }>;
   savePos: (id: number, ep: number, t: number) => void;
   /** 只记「看到第几集」（选集切换时用），不看秒数 */
   saveEp: (id: number, ep: number) => void;
+  /** 某一集播完 */
+  markDone: (id: number, ep: number) => void;
   searchHist: string[]; addSearch: (q: string) => void; clearSearchHist: () => void;
   toasts: Toast[]; toast: (msg: string, icon?: Toast["icon"]) => void;
 };
+
+/** pos 只留最近 120 部：按 at 淘汰最久未看的（按 id 排序会永远删最小 id） */
+function trimPos(pos: Persist["pos"]) {
+  const keys = Object.keys(pos);
+  if (keys.length <= 120) return pos;
+  const drop = keys.sort((a, b) => pos[a].at - pos[b].at).slice(0, keys.length - 120);
+  for (const k of drop) delete pos[k];
+  return pos;
+}
 
 const Ctx = createContext<Store>(null as unknown as Store);
 export const useStore = () => useContext(Ctx);
@@ -222,13 +233,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const prev = s.pos[String(id)];
       if (prev && prev.ep === ep && Math.abs(prev.t - t) < 4) return s;
       const pos: Persist["pos"] = { ...s.pos, [String(id)]: { ep, t, at: Date.now() } };
-      const keys = Object.keys(pos);
-      /* 只留最近 120 部：按 at 淘汰最久未看的（按 id 排序会永远删最小 id） */
-      if (keys.length > 120) {
-        const drop = keys.sort((a, b) => pos[a].at - pos[b].at).slice(0, keys.length - 120);
-        for (const k of drop) delete pos[k];
-      }
-      return { ...s, pos };
+      return { ...s, pos: trimPos(pos) };
     });
   }, []);
 
@@ -237,8 +242,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setP((s) => {
       const prev = s.pos[String(id)];
       if (prev && prev.ep === ep) return s;
-      return { ...s, pos: { ...s.pos, [String(id)]: { ep, t: 0, at: Date.now() } } };
+      return { ...s, pos: trimPos({ ...s.pos, [String(id)]: { ep, t: 0, at: Date.now() } }) };
     });
+  }, []);
+
+  /** 某一集播完：记成「已看完」，留给「我的」角标用 */
+  const markDone = useCallback((id: number, ep: number) => {
+    if (!id || !ep) return;
+    setP((s) => ({ ...s, pos: trimPos({ ...s.pos, [String(id)]: { ep, t: 0, at: Date.now(), done: true } }) }));
   }, []);
 
   const value = useMemo<Store>(() => ({
@@ -251,7 +262,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isFav: (id) => p.favs.includes(id),
     toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory, clearLocal,
     muted: p.muted, setMuted, volume: p.volume, setVolume, theater, setTheater, fs, setFs,
-    rate: p.rate, setRate, pos: p.pos, savePos, saveEp,
+    rate: p.rate, setRate, pos: p.pos, savePos, saveEp, markDone,
     searchHist: p.searchHist, addSearch, clearSearchHist,
     toasts, toast,
   }), [theme, tab, setTab, stack, push, pop, user, loginOpen, logout,

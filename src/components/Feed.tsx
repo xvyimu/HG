@@ -552,6 +552,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   const pickEp = (ep: number) => {
     setEpMap((m) => ({ ...m, [curId]: ep }));
+    /* 选集/自动连播都记下「看到第几集」，短时间看新集也不会丢 */
+    if (curId) store.saveEp(curId, ep);
     setPanel(null);
   };
 

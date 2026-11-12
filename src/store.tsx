@@ -102,6 +102,8 @@ type Store = {
   /** 断点续播位置 */
   pos: Record<string, { ep: number; t: number; at: number }>;
   savePos: (id: number, ep: number, t: number) => void;
+  /** 只记「看到第几集」（选集切换时用），不看秒数 */
+  saveEp: (id: number, ep: number) => void;
   searchHist: string[]; addSearch: (q: string) => void; clearSearchHist: () => void;
   toasts: Toast[]; toast: (msg: string, icon?: Toast["icon"]) => void;
 };
@@ -230,6 +232,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const saveEp = useCallback((id: number, ep: number) => {
+    if (!id || !ep) return;
+    setP((s) => {
+      const prev = s.pos[String(id)];
+      if (prev && prev.ep === ep) return s;
+      return { ...s, pos: { ...s.pos, [String(id)]: { ep, t: 0, at: Date.now() } } };
+    });
+  }, []);
+
   const value = useMemo<Store>(() => ({
     platform: envPlatform,
     theme, setTheme: setThemeState,
@@ -240,7 +251,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isFav: (id) => p.favs.includes(id),
     toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory, clearLocal,
     muted: p.muted, setMuted, volume: p.volume, setVolume, theater, setTheater, fs, setFs,
-    rate: p.rate, setRate, pos: p.pos, savePos,
+    rate: p.rate, setRate, pos: p.pos, savePos, saveEp,
     searchHist: p.searchHist, addSearch, clearSearchHist,
     toasts, toast,
   }), [theme, tab, setTab, stack, push, pop, user, loginOpen, logout,

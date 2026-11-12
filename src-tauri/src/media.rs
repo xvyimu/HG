@@ -149,7 +149,7 @@ fn stable_key(url: &str) -> String {
         .split('&')
         .filter(|kv| {
             let k = kv.split('=').next().unwrap_or("");
-            !matches!(k, "auth_key" | "time" | "v" | "via" | "via_bm" | "via_m" | "t" | "ts")
+            !matches!(k, "auth_key" | "time" | "t" | "ts" | "via" | "via_bm" | "via_m")
         })
         .collect();
     if keep.is_empty() {
@@ -167,6 +167,10 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
     }
     let (_, bytes) = fetch_bytes(url).await?;
     let text = String::from_utf8_lossy(&bytes).to_string();
+    /* 只接 m3u8：万一拿到 mp4/js 之类，别把整段 body 塞进清单缓存 */
+    if !text.trim_start().starts_with("#EXTM3U") {
+        return Err("目标不是 m3u8 清单".to_string());
+    }
 
     let mut out = String::with_capacity(text.len() + 512);
     for raw in text.lines() {

@@ -28,7 +28,7 @@ export default function Profile({ wide }: { wide: boolean }) {
 
   useEffect(() => {
     let alive = true;
-    if (!ids.length) { setCards([]); return; }
+    if (!ids.length) { setCards([]); setLoading(false); return; }
     setLoading(true);
     Promise.allSettled(ids.slice(0, 12).map((id) => api.video(id)))
       .then((rs) => {
@@ -76,7 +76,8 @@ export default function Profile({ wide }: { wide: boolean }) {
           ) : cards.length ? (
             <div className={`grid gap-2 ${wide ? "grid-cols-4 xl:grid-cols-5" : "grid-cols-3"}`}>
               {cards.map((c) => {
-                const at = tab === "history" ? pos[String(c.id)] : undefined;
+                const p = tab === "history" ? pos[String(c.id)] : undefined;
+                const at = p && p.t >= 10 ? p : undefined;
                 return (
                   <button key={c.id} onClick={() => push({ kind: "feed", videoIds: cards.map((x) => x.id), index: cards.findIndex((x) => x.id === c.id), title: tab === "fav" ? "我的收藏" : "观看历史" })}
                     className="relative rounded-(--r-sm) overflow-hidden bg-s1 elev-1 pressable" style={{ paddingTop: "133%" }}>
@@ -100,7 +101,12 @@ export default function Profile({ wide }: { wide: boolean }) {
             <Empty icon={<IClock size={24} />} title="还没有观看记录" />
           )}
           {cards.length > 0 && tab === "history" && (
-            <button onClick={clearHistory} className="mt-3 w-full h-9 rounded-(--r-ctl) bg-s3 text-[12px] text-mut pressable">清空观看记录</button>
+            <div className="mt-3 text-center text-[10.5px] text-dim">
+              {ids.length > 12 ? `共 ${ids.length} 条 · 只显示最近 12 条` : `共 ${ids.length} 条`}
+            </div>
+          )}
+          {cards.length > 0 && tab === "history" && (
+            <button onClick={clearHistory} className="mt-2 w-full h-9 rounded-(--r-ctl) bg-s3 text-[12px] text-mut pressable">清空观看记录</button>
           )}
         </div>
 

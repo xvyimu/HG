@@ -97,15 +97,16 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   const curId = videoIds[index];
   const detail = details[curId];
+  const episodes = detail?.episodes || [];
   const savedEp = curId ? store.pos[String(curId)] : undefined;
-  /** 从「我的·观看记录」或首页进来时，直接回到上次看到的那一集（看过 10s 以上才算） */
-  const curEp = epMap[curId] || (savedEp && savedEp.t >= 10 ? savedEp.ep : 0) || 1;
+  /** 从「我的·观看记录」或首页进来时，直接回到上次看到的那一集（看过 10s 以上、且该集仍在列表里才算） */
+  const savedEpOk = savedEp && savedEp.t >= 10 && (!episodes.length || episodes.some((e) => e.ep_num === savedEp.ep));
+  const curEp = epMap[curId] || (savedEpOk ? savedEp.ep : 0) || 1;
   const playKey = `${curId}:${curEp}`;
   /** 播放地址缓存：带 auth_key 时效，过期前 5 分钟自动重取 */
   const playCache = useRef<Record<string, { url: string; exp: number }>>({});
   /** 同步读缓存：切到已预取/已看过的集时首帧就有地址，VideoSurface 不会被卸载重建 */
   const playUrl = playUrls[playKey] || playCache.current[playKey]?.url || "";
-  const episodes = detail?.episodes || [];
   const post = posts[curId];
 
   /** 统一视图模型：短剧与吃瓜帖子共用同一套播放界面 */
@@ -232,9 +233,9 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   useEffect(() => {
     if (!curId) return undefined;
     const key = playKey;
-    if (!t0Ref.current[key]) t0Ref.current[key] = performance.now();
     const hit = playCache.current[key];
     if (hit && hit.exp - Date.now() / 1000 > 300) {
+      t0Ref.current[key] = performance.now();
       setPlayUrls((m) => (m[key] === hit.url ? m : { ...m, [key]: hit.url }));
       addHistory(curId);
       return undefined;
@@ -243,6 +244,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     if (kind === "post") {
       const direct = post?.video_url ? mediaUrl(post.video_url) : "";
       if (direct) {
+        t0Ref.current[key] = performance.now();
         setPlayUrls((m) => ({ ...m, [key]: direct }));
         addHistory(curId);
         return undefined;
@@ -253,23 +255,26 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     fetchPlay(curId, curEp)
       .then((url) => {
         if (!alive) return;
+        t0Ref.current[key] = performance.now();
         setPlayUrls((m) => ({ ...m, [key]: url }));
         setErr("");
         addHistory(curId);
       })
       .catch((e) => {
         if (!alive) return;
+        delete t0Ref.current[key];
         /* 兜底：详情里 SSR 预置的第 1 集地址 */
         if (fallback) {
+          t0Ref.current[key] = performance.now();
           setPlayUrls((m) => ({ ...m, [key]: fallback }));
           setErr("");
           addHistory(curId);
           return;
         }
-        setErr(user ? (e as Error).message || "取播放地址失败" : `${(e as Error).message || "取播放地址失败"} · 可尝试登录后重试`);
+        setErr((e as Error).message || "取播放地址失败");
       });
     return () => { alive = false; };
-  }, [curId, curEp, playKey, kind, post?.video_url, fetchPlay, addHistory, user, detail?.video_url, detail?.video_url_hevc]);
+  }, [curId, curEp, playKey, kind, post?.video_url, fetchPlay, addHistory, detail?.video_url, detail?.video_url_hevc]);
 
   /* 预取下一集地址（只调接口，不预载视频）；顺带把下一集的 m3u8 拉进 Rust 缓存，
      切集时清单和 DNS/TLS 都是热的，起播快一截 */
@@ -279,7 +284,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     if (!nx) return undefined;
     const timer = window.setTimeout(() => {
       void fetchPlay(curId, nx.ep_num)
-        .then((u) => { if (u) void fetch(playlist(u)).catch(() => {}); })
+        .then((u) => { if (u && /\.m3u8(\?|$)/i.test(u)) void fetch(playlist(u)).catch(() => {}); })
         .catch(() => {});
     }, 1500);
     return () => window.clearTimeout(timer);

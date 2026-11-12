@@ -170,17 +170,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const setTab = useCallback((t: Tab) => { setTabRaw(t); setStack([]); }, []);
   const push = useCallback((pg: PageInput) => {
-    setStack((s) => [...s, { ...pg, key: `p${++seq}` } as Page]);
-  }, []);
-  const pop = useCallback(() => setStack((s) => s.slice(0, -1)), []);
-  /** 排行榜是唯一可反复点的入口：已开就回到那一层，不重复压栈 */
-  const openRanks = useCallback(() => {
+    /* 排行榜可能在多个入口被点：栈里已有就回到那一层，不重复压栈（否则返回键看起来没反应） */
     setStack((s) => {
-      const i = s.findIndex((pg) => pg.kind === "ranks");
-      if (i >= 0) return s.slice(0, i + 1);
-      return [...s, { kind: "ranks", key: `p${++seq}` } as Page];
+      if (pg.kind === "ranks") {
+        const i = s.findIndex((x) => x.kind === "ranks");
+        if (i >= 0) return s.slice(0, i + 1);
+      }
+      return [...s, { ...pg, key: `p${++seq}` } as Page];
     });
   }, []);
+  const pop = useCallback(() => setStack((s) => s.slice(0, -1)), []);
+  const openRanks = useCallback(() => push({ kind: "ranks" }), [push]);
 
   const toggleLikeLocal = useCallback((id: number) => {
     let on = false;

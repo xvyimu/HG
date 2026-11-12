@@ -50,9 +50,9 @@ export function WindowsTitleBar({ collapsed, onToggle }: { collapsed: boolean; o
 }
 
 export function WindowsRail({ collapsed }: { collapsed: boolean }) {
-  const { tab, setTab, user, push, stack } = useStore();
-  /** 排行榜是压在 tab 之上的一层页面，高亮要跟着栈顶走，否则侧栏会一直停在「我的」 */
-  const ranksOpen = stack.length > 0 && stack[stack.length - 1].kind === "ranks";
+  const { tab, setTab, user, openRanks, stack } = useStore();
+  /** 排行榜是压在 tab 之上的一层页面：栈里存在就高亮它，且不让底层 tab 同时高亮 */
+  const ranksOpen = stack.some((pg) => pg.kind === "ranks");
   const items: { key: Tab; label: string; Icon: typeof IHome; Filled: typeof IHomeF }[] = [
     { key: "home", label: "首页", Icon: IHome, Filled: IHomeF },
     { key: "category", label: "分类", Icon: IGrid, Filled: IGridF },
@@ -61,23 +61,26 @@ export function WindowsRail({ collapsed }: { collapsed: boolean }) {
   return (
     <nav className={`win-sidebar ${collapsed ? "is-compact" : ""}`} aria-label="主导航">
       <div className="win-sidebar-inner">
-        <button className={`win-search-launch ${tab === "search" ? "is-selected" : ""}`}
+        <button className={`win-search-launch ${!ranksOpen && tab === "search" ? "is-selected" : ""}`}
           onClick={() => setTab("search")} aria-label="搜索">
           <ISearch size={19} strokeWidth={1.7} />
           <span className="win-nav-copy">搜索你感兴趣的</span>
           <kbd className="win-nav-key">/</kbd>
         </button>
         <div className="win-nav-items">
-          {items.map(({ key, label, Icon, Filled }) => (
-            <button key={key} aria-current={tab === key ? "page" : undefined}
-              className={`win-nav-item ${tab === key ? "is-selected" : ""}`}
+          {items.map(({ key, label, Icon, Filled }) => {
+            const sel = !ranksOpen && tab === key;
+            return (
+            <button key={key} aria-current={sel ? "page" : undefined}
+              className={`win-nav-item ${sel ? "is-selected" : ""}`}
               onClick={() => setTab(key)}>
-              <span className="win-nav-symbol">{tab === key ? <Filled size={21} /> : <Icon size={21} strokeWidth={1.7} />}</span>
+              <span className="win-nav-symbol">{sel ? <Filled size={21} /> : <Icon size={21} strokeWidth={1.7} />}</span>
               <span className="win-nav-copy">{label}</span>
             </button>
-          ))}
+            );
+          })}
           <button className={`win-nav-item ${ranksOpen ? "is-selected" : ""}`} aria-current={ranksOpen ? "page" : undefined}
-            onClick={() => push({ kind: "ranks" })}>
+            onClick={openRanks}>
             <span className="win-nav-symbol">{ranksOpen ? <ITrophy size={21} strokeWidth={2.1} /> : <ITrophy size={21} strokeWidth={1.7} />}</span>
             <span className="win-nav-copy">排行榜</span>
           </button>

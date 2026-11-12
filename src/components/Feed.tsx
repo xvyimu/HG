@@ -388,10 +388,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     const el = e.currentTarget;
     const width = el.clientWidth || 1;
     try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    const v = videoRef.current?.el();
     const g = {
       x: e.clientX, y: e.clientY, startY: e.clientY, t: Date.now(), base: time, width,
       mode: "idle" as "idle" | "hold" | "scrub",
-      wasPaused: pausedRef.current,
+      wasPaused: v ? v.paused : pausedRef.current,
       timer: window.setTimeout(() => {
         const cur = gesture.current;
         if (!cur || cur.mode !== "idle") return;
@@ -652,9 +653,9 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   onPause={() => setPaused(true)}
                   onWaiting={() => setWaiting(true)}
                   onEnded={() => {
-            if (curId) store.markDone(curId, curEp);
             const next = episodes.find((e) => e.ep_num === curEp + 1);
             if (next) pickEp(next.ep_num);
+            else if (curId && episodes.length) store.markDone(curId, curEp);
           }}
                   onError={onPlayError} />
                 </div>

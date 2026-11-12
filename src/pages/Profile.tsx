@@ -77,7 +77,7 @@ export default function Profile({ wide }: { wide: boolean }) {
             <div className={`grid gap-2 ${wide ? "grid-cols-4 xl:grid-cols-5" : "grid-cols-3"}`}>
               {cards.map((c) => {
                 const p = tab === "history" ? pos[String(c.id)] : undefined;
-                const at = p && (p.t >= 10 || p.ep > 1) ? p : undefined;
+                const at = p && (p.done || p.t >= 10 || p.ep > 1) ? p : undefined;
                 return (
                   <button key={c.id} onClick={() => push({ kind: "feed", videoIds: cards.map((x) => x.id), index: cards.findIndex((x) => x.id === c.id), title: tab === "fav" ? "我的收藏" : "观看历史" })}
                     className="relative rounded-(--r-sm) overflow-hidden bg-s1 elev-1 pressable" style={{ paddingTop: "133%" }}>

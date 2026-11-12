@@ -58,7 +58,15 @@ function loadPersist(): Persist {
   try {
     const raw = localStorage.getItem(LS);
     if (!raw) return DEFAULTS;
-    return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Persist>) };
+    const p = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Persist>) };
+    /* 老版本 pos 条目可能缺 at / done，加载时规整，避免排序出 NaN */
+    const pos: Persist["pos"] = {};
+    for (const [k, rawEntry] of Object.entries(p.pos || {})) {
+      if (!rawEntry || typeof rawEntry !== "object") continue;
+      const e = rawEntry as Partial<Persist["pos"][string]>;
+      pos[k] = { ep: Number(e.ep) || 1, t: Number(e.t) || 0, at: Number(e.at) || Date.now(), done: !!e.done };
+    }
+    return { ...p, pos };
   } catch {
     return DEFAULTS;
   }
@@ -81,7 +89,7 @@ type Store = {
   platform: Platform;
   theme: Theme; setTheme: (t: Theme) => void;
   tab: Tab; setTab: (t: Tab) => void;
-  stack: Page[]; push: (p: PageInput) => void; pop: () => void;
+  stack: Page[]; push: (p: PageInput) => void; pop: () => void; openRanks: () => void;
   user: User | null; setUser: (u: User | null) => void;
   loginOpen: boolean; setLoginOpen: (b: boolean) => void;
   logout: () => Promise<void>;
@@ -114,7 +122,7 @@ type Store = {
 function trimPos(pos: Persist["pos"]) {
   const keys = Object.keys(pos);
   if (keys.length <= 120) return pos;
-  const drop = keys.sort((a, b) => pos[a].at - pos[b].at).slice(0, keys.length - 120);
+  const drop = keys.sort((a, b) => (Number(pos[a].at) || 0) - (Number(pos[b].at) || 0)).slice(0, keys.length - 120);
   for (const k of drop) delete pos[k];
   return pos;
 }
@@ -165,6 +173,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setStack((s) => [...s, { ...pg, key: `p${++seq}` } as Page]);
   }, []);
   const pop = useCallback(() => setStack((s) => s.slice(0, -1)), []);
+  /** 排行榜是唯一可反复点的入口：已开就回到那一层，不重复压栈 */
+  const openRanks = useCallback(() => {
+    setStack((s) => {
+      const i = s.findIndex((pg) => pg.kind === "ranks");
+      if (i >= 0) return s.slice(0, i + 1);
+      return [...s, { kind: "ranks", key: `p${++seq}` } as Page];
+    });
+  }, []);
 
   const toggleLikeLocal = useCallback((id: number) => {
     let on = false;
@@ -232,7 +248,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setP((s) => {
       const prev = s.pos[String(id)];
       if (prev && prev.ep === ep && Math.abs(prev.t - t) < 4) return s;
-      const pos: Persist["pos"] = { ...s.pos, [String(id)]: { ep, t, at: Date.now() } };
+      /* 回看/拖动不该把「已看完」抹掉 */
+      const done = prev?.done && prev.ep === ep ? { done: true } : {};
+      const pos: Persist["pos"] = { ...s.pos, [String(id)]: { ep, t, at: Date.now(), ...done } };
       return { ...s, pos: trimPos(pos) };
     });
   }, []);
@@ -242,7 +260,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setP((s) => {
       const prev = s.pos[String(id)];
       if (prev && prev.ep === ep) return s;
-      return { ...s, pos: trimPos({ ...s.pos, [String(id)]: { ep, t: 0, at: Date.now() } }) };
+      const done = prev?.done ? { done: true } : {};
+      return { ...s, pos: trimPos({ ...s.pos, [String(id)]: { ep, t: 0, at: Date.now(), ...done } }) };
     });
   }, []);
 
@@ -255,7 +274,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<Store>(() => ({
     platform: envPlatform,
     theme, setTheme: setThemeState,
-    tab, setTab, stack, push, pop,
+    tab, setTab, stack, push, pop, openRanks,
     user, setUser, loginOpen, setLoginOpen, logout,
     likes: p.likes, favs: p.favs, history: p.history, follows: p.follows,
     isLiked: (id) => p.likes.includes(id),
@@ -265,9 +284,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     rate: p.rate, setRate, pos: p.pos, savePos, saveEp, markDone,
     searchHist: p.searchHist, addSearch, clearSearchHist,
     toasts, toast,
-  }), [theme, tab, setTab, stack, push, pop, user, loginOpen, logout,
+  }), [theme, tab, setTab, stack, push, pop, openRanks, user, loginOpen, logout,
     p, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory, clearLocal,
-    setMuted, setVolume, setRate, savePos, addSearch, clearSearchHist, toasts, toast, theater, setTheater, fs, setFs]);
+    setMuted, setVolume, setRate, savePos, saveEp, markDone, addSearch, clearSearchHist, toasts, toast, theater, setTheater, fs, setFs]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

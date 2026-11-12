@@ -168,7 +168,7 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
     let (_, bytes) = fetch_bytes(url).await?;
     let text = String::from_utf8_lossy(&bytes).to_string();
     /* 只接 m3u8：万一拿到 mp4/js 之类，别把整段 body 塞进清单缓存 */
-    if !text.trim_start().starts_with("#EXTM3U") {
+    if !text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{FEFF}').starts_with("#EXTM3U") {
         return Err("目标不是 m3u8 清单".to_string());
     }
 

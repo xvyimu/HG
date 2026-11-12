@@ -12,12 +12,9 @@ use std::time::Duration;
 pub const DEFAULT_BASE: &str = "https://huangguoai.com";
 
 /// 备用线路：站点换域名时不必重新发版。
-/// 探测标准是「信封能返回 status=1」，静态发布页会被自动跳过。
-pub const CANDIDATES: &[&str] = &[
-    "https://huangguoai.com",
-    "https://api.huangguoai.com",
-    "https://huangguoai.pages.dev",
-];
+/// 只收同一注册域名下的主机 —— 探活成功就会带上 Bearer token 请求，
+/// 收进第三方站点等于把登录凭据发出去。
+pub const CANDIDATES: &[&str] = &["https://huangguoai.com", "https://api.huangguoai.com"];
 
 static BASE_CUR: Lazy<std::sync::RwLock<String>> =
     Lazy::new(|| std::sync::RwLock::new(DEFAULT_BASE.to_string()));
@@ -38,11 +35,28 @@ fn set_base(v: &str) {
     }
 }
 
+/// 只认「请求根本没发出去」的错误。
+/// 注意别用宽泛的 `connect`：`HTTP 500 {"msg":"database connection error"}`
+/// 这类业务失败会被误判成线路故障，进而换线路重发（写操作会重复）。
 fn is_conn_err(e: &str) -> bool {
+    if e.starts_with("HTTP ") || e.starts_with("登录已过期") {
+        return false;
+    }
     let l = e.to_lowercase();
-    ["connection", "connect", "dns", "timed out", "error sending"]
-        .iter()
-        .any(|k| l.contains(k))
+    [
+        "error sending request",
+        "connection refused",
+        "connection reset",
+        "connection closed",
+        "failed to lookup",
+        "dns error",
+        "tcp connect error",
+        "os error 10060",
+        "os error 10054",
+        "timed out",
+    ]
+    .iter()
+    .any(|k| l.contains(k))
 }
 
 /// 单线路探活：最小的列表请求，返回 status=1 才算通
@@ -58,7 +72,7 @@ async fn probe_host(host: &str) -> bool {
         .post(&url)
         .header("Accept", "application/json")
         .header("Referer", format!("{host}/"))
-        .timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(2))
         .json(&envelope)
         .send()
         .await
@@ -78,23 +92,43 @@ async fn probe_host(host: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 选路：当前线路通就直接用；不通则按候选表重挑一条。
-/// 只在启动与连接层失败时调用，正常请求零额外开销。
-pub async fn pick_base() -> String {
+/// 选路：当前线路通就直接用；不通则并发探候选。
+/// `skip_cur` 用于「刚才就是这条线路连不上」的场景，省掉一次必然失败的探测。
+pub async fn pick_base_ex(skip_cur: bool) -> String {
     let cur = base();
-    if probe_host(&cur).await {
+    if !skip_cur && probe_host(&cur).await {
         return cur;
     }
-    for c in CANDIDATES {
-        if *c == cur {
-            continue;
+    let others: Vec<&str> = CANDIDATES.iter().copied().filter(|c| *c != cur.as_str()).collect();
+    match others.as_slice() {
+        [] => cur,
+        [a] => {
+            if probe_host(a).await {
+                set_base(a);
+                (*a).to_string()
+            } else {
+                cur
+            }
         }
-        if probe_host(c).await {
-            set_base(c);
-            return c.to_string();
+        [a, b, ..] => {
+            /* 候选并发探活，最坏 2s 而不是 4s */
+            let (oka, okb) = tokio::join!(probe_host(a), probe_host(b));
+            if oka {
+                set_base(a);
+                (*a).to_string()
+            } else if okb {
+                set_base(b);
+                (*b).to_string()
+            } else {
+                cur
+            }
         }
     }
-    cur
+}
+
+/// 启动时用：当前线路优先
+pub async fn pick_base() -> String {
+    pick_base_ex(false).await
 }
 
 pub const UA: &str =
@@ -197,7 +231,7 @@ pub async fn edge(
     let mut host = base();
     let mut out = edge_once(&host, &envelope, token).await;
     if out.as_ref().err().map(|e| is_conn_err(e)).unwrap_or(false) {
-        let next = pick_base().await;
+        let next = pick_base_ex(true).await;
         if next != host {
             host = next;
             out = edge_once(&host, &envelope, token).await;

@@ -1,7 +1,8 @@
 /**
  * 播放地址解析回归测试（纯函数，不联网）
  *
- *   node --test tests/
+ *   node --test tests/play.test.mjs
+ *   需要 Node ≥ 22.6（原生 TS 类型剥离）；≥ 23.6 默认开启。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -51,4 +52,19 @@ test("诊断报告列出非空字符串字段", () => {
   const r = playFieldReport({ video_url: "", title: "第1集", page_title: "x" });
   assert.ok(r.includes("title=第1集"));
   assert.ok(!r.includes("video_url="));
+});
+
+test("分享页地址不会被当成播放地址", () => {
+  assert.equal(pickPlayUrl({ url: "https://huangguoai.com/video/117/", video_url: "" }), "");
+  assert.equal(pickPlayUrl({ src: "https://huangguoai.com/share.html?id=1" }), "");
+});
+
+test("字段名完全陌生且地址不带 .m3u8 → 返回空，交给上层兜底（不误报）", () => {
+  assert.equal(pickPlayUrl({ play_2027: "https://cdn.x/play?id=1" }), "");
+});
+
+test("诊断日志里的 auth_key 被打码", () => {
+  const r = playFieldReport({ video_url: M3U8 });
+  assert.ok(!r.includes("1793700503"));
+  assert.ok(r.includes("auth_key=***"));
 });

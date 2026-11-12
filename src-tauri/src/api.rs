@@ -1,6 +1,6 @@
 //! 业务命令：登录 / 列表 / 详情 / 播放 / 互动。
 
-use crate::net::{edge, pick_base};
+use crate::net::{base, edge, pick_base};
 use crate::session::SessionStore;
 use serde_json::{json, Value};
 use tauri::State;
@@ -51,12 +51,14 @@ pub async fn debug_log(app: tauri::AppHandle, msg: String) -> Result<(), String>
 
 #[tauri::command]
 pub async fn app_boot(state: State<'_, Api>) -> Result<Value, String> {
-    /* 启动时选路：站点换域名后不必重新发版 */
-    let host = pick_base().await;
+    /* 选路放后台：不要让冷启动白等探测（最坏 4s），失败会在首次请求时自愈 */
+    tauri::async_runtime::spawn(async {
+        let _ = pick_base().await;
+    });
     Ok(json!({
         "user": state.session.user(),
         "logged_in": state.session.token().is_some(),
-        "base": host,
+        "base": base(),
     }))
 }
 

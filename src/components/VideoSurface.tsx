@@ -23,6 +23,8 @@ type Props = {
   /** 换源后重新套用，避免切集时音量/倍速被浏览器重置 */
   volume?: number;
   rate?: number;
+  /** 同一条地址需要强制重建播放器时递增（上游恢复但 URL 未变） */
+  reload?: number;
   onTime?: (t: number) => void;
   onDuration?: (d: number) => void;
   onSize?: (w: number, h: number) => void;
@@ -37,7 +39,7 @@ type Props = {
 
 /** 只负责「播」：hls.js + video 元素，控制条由外层渲染。 */
 const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
-  { src, poster, autoPlay = true, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
+  { src, poster, autoPlay = true, muted = false, loop = false, fit = "contain", volume = 1, rate = 1, reload = 0,
     onTime, onDuration, onSize, onPlaying, onPause, onWaiting, onEnded, onError, onClick, className = "" },
   ref,
 ) {
@@ -110,11 +112,14 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
           onErrorRef.current?.(`${data.type}/${data.details}`, true);
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls?.startLoad();
           else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls?.recoverMediaError();
-          else { hls?.destroy(); hlsRef.current = null; }
+          /* 其它致命错误不销毁实例：父组件会换地址或用 reload 触发重新 loadSource，
+             销毁会让「地址没变」的重试永远重建不出来 */
+          else hls?.stopLoad();
         });
         hls.attachMedia(video);
         hlsRef.current = hls;
       }
+      hls.stopLoad();
       hls.loadSource(url);
       return;
     }
@@ -123,7 +128,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     video.src = url;
     if (autoPlay) video.play().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src]);
+  }, [src, reload]);
 
   /* 组件卸载才销毁实例 */
   useEffect(() => () => {

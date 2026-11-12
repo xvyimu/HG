@@ -43,8 +43,8 @@ type Persist = {
   searchHist: string[];
   /** 上次选择的倍速，跨会话保留 */
   rate: number;
-  /** 断点续播：`id` → 上次看到的集与秒数 */
-  pos: Record<string, { ep: number; t: number }>;
+  /** 断点续播：`id` → 上次看到的集与秒数（`at` 用于淘汰最久未看的） */
+  pos: Record<string, { ep: number; t: number; at: number }>;
 };
 
 const LS = "hghub_app_v1";
@@ -100,7 +100,7 @@ type Store = {
   /** 播放倍速（持久化） */
   rate: number; setRate: (r: number) => void;
   /** 断点续播位置 */
-  pos: Record<string, { ep: number; t: number }>;
+  pos: Record<string, { ep: number; t: number; at: number }>;
   savePos: (id: number, ep: number, t: number) => void;
   searchHist: string[]; addSearch: (q: string) => void; clearSearchHist: () => void;
   toasts: Toast[]; toast: (msg: string, icon?: Toast["icon"]) => void;
@@ -128,7 +128,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [theme]);
 
   useEffect(() => {
-    try { localStorage.setItem(LS, JSON.stringify(p)); } catch { /* ignore */ }
+    /* 去抖：播放进度每几秒变一次，直接同步写 localStorage 会卡主线程 */
+    const timer = window.setTimeout(() => {
+      try { localStorage.setItem(LS, JSON.stringify(p)); } catch { /* ignore */ }
+    }, 800);
+    return () => window.clearTimeout(timer);
   }, [p]);
 
   useEffect(() => {
@@ -177,7 +181,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setP((s) => ({ ...s, history: [id, ...s.history.filter((x) => x !== id)].slice(0, 80) }));
   }, []);
   const clearHistory = useCallback(() => setP((s) => ({ ...s, history: [] })), []);
-  const clearLocal = useCallback(() => setP((s) => ({ ...s, likes: [], favs: [], history: [], searchHist: [] })), []);
+  const clearLocal = useCallback(() => setP((s) => ({ ...s, likes: [], favs: [], history: [], searchHist: [], pos: {} })), []);
   const addSearch = useCallback((q: string) => {
     const t = q.trim();
     if (!t) return;
@@ -215,10 +219,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setP((s) => {
       const prev = s.pos[String(id)];
       if (prev && prev.ep === ep && Math.abs(prev.t - t) < 4) return s;
-      const pos: Persist["pos"] = { ...s.pos, [String(id)]: { ep, t } };
+      const pos: Persist["pos"] = { ...s.pos, [String(id)]: { ep, t, at: Date.now() } };
       const keys = Object.keys(pos);
-      /* 只留最近 120 部，避免 localStorage 无限增长 */
-      if (keys.length > 120) for (const k of keys.slice(0, keys.length - 120)) delete pos[k];
+      /* 只留最近 120 部：按 at 淘汰最久未看的（按 id 排序会永远删最小 id） */
+      if (keys.length > 120) {
+        const drop = keys.sort((a, b) => pos[a].at - pos[b].at).slice(0, keys.length - 120);
+        for (const k of drop) delete pos[k];
+      }
       return { ...s, pos };
     });
   }, []);

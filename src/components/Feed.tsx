@@ -99,7 +99,10 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const detail = details[curId];
   const curEp = epMap[curId] || 1;
   const playKey = `${curId}:${curEp}`;
-  const playUrl = playUrls[playKey] || "";
+  /** 播放地址缓存：带 auth_key 时效，过期前 5 分钟自动重取 */
+  const playCache = useRef<Record<string, { url: string; exp: number }>>({});
+  /** 同步读缓存：切到已预取/已看过的集时首帧就有地址，VideoSurface 不会被卸载重建 */
+  const playUrl = playUrls[playKey] || playCache.current[playKey]?.url || "";
   const episodes = detail?.episodes || [];
   const post = posts[curId];
 
@@ -195,45 +198,51 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, index, videoIds]);
 
-  /* 播放地址缓存：带 auth_key 时效，过期前 5 分钟自动重取 */
-  const playCache = useRef<Record<string, { url: string; exp: number }>>({});
-
   const fetchPlay = useCallback(async (id: number, ep: number, force = false): Promise<string> => {
     const key = `${id}:${ep}`;
-    const now = Date.now() / 1000;
     const hit = playCache.current[key];
-    if (!force && hit && hit.exp - now > 300) return hit.url;
+    if (!force && hit && hit.exp - Date.now() / 1000 > 300) return hit.url;
 
-    let last: unknown = null;
+    /* 只对「空地址」重试一次（CDN 抖动）；连接/业务错误直接抛，不叠加延迟 */
     for (let attempt = 0; attempt < 2; attempt++) {
+      let info: unknown;
       try {
-        const info = await api.play(id, ep);
-        const url = pickPlayUrl(info);
-        if (!url) {
-          const keys = info && typeof info === "object" ? Object.keys(info as object).slice(0, 10).join("/") : typeof info;
-          void api.debugLog(`play-empty id=${id} ep=${ep} attempt=${attempt} :: ${playFieldReport(info)}`);
-          last = new Error(attempt === 0 ? "暂无播放地址，正在重试…" : `站点未返回播放地址（${keys || "空响应"}）`);
-        } else {
-          playCache.current[key] = { url, exp: playUrlExpiry(url) };
-          return url;
-        }
+        info = await api.play(id, ep);
       } catch (e) {
-        last = e;
-        void api.debugLog(`play-fail id=${id} ep=${ep} attempt=${attempt} :: ${(e as Error).message}`);
+        void api.debugLog(`play-fail id=${id} ep=${ep} :: ${(e as Error).message}`);
+        throw e;
       }
-      await new Promise((r) => setTimeout(r, 600));
+      const url = pickPlayUrl(info);
+      if (url) {
+        playCache.current[key] = { url, exp: playUrlExpiry(url) };
+        return url;
+      }
+      const keys = info && typeof info === "object" ? Object.keys(info as object).slice(0, 10).join("/") : typeof info;
+      void api.debugLog(`play-empty id=${id} ep=${ep} attempt=${attempt} :: ${playFieldReport(info)}`);
+      if (attempt === 0) { await new Promise((r) => setTimeout(r, 400)); continue; }
+      throw new Error(`站点未返回播放地址（${keys || "空响应"}）`);
     }
-    throw last instanceof Error ? last : new Error("取播放地址失败");
+    throw new Error("取播放地址失败");
   }, []);
 
   /* 拉播放地址 */
   useEffect(() => {
-    if (!curId) return;
+    if (!curId) return undefined;
     const key = playKey;
     const hit = playCache.current[key];
     if (hit && hit.exp - Date.now() / 1000 > 300) {
       setPlayUrls((m) => (m[key] === hit.url ? m : { ...m, [key]: hit.url }));
+      addHistory(curId);
       return undefined;
+    }
+    /* 吃瓜帖子：详情里就是成品地址，不走 /play（那是剧集接口） */
+    if (kind === "post") {
+      const direct = post?.video_url ? mediaUrl(post.video_url) : "";
+      if (direct) {
+        setPlayUrls((m) => ({ ...m, [key]: direct }));
+        addHistory(curId);
+        return undefined;
+      }
     }
     let alive = true;
     const fallback = curEp === 1 ? (detail?.video_url || detail?.video_url_hevc || "") : "";
@@ -256,7 +265,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         setErr(user ? (e as Error).message || "取播放地址失败" : `${(e as Error).message || "取播放地址失败"} · 可尝试登录后重试`);
       });
     return () => { alive = false; };
-  }, [curId, curEp, playKey, fetchPlay, addHistory, detail?.video_url, detail?.video_url_hevc]);
+  }, [curId, curEp, playKey, kind, post?.video_url, fetchPlay, addHistory, user, detail?.video_url, detail?.video_url_hevc]);
 
   /* 预取下一集地址（只调接口，不预载视频） */
   useEffect(() => {
@@ -269,17 +278,19 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /* 断点续播：同一部剧、同一集，上次看到 ≥10s 且未看完 → 自动接上 */
   const resumedRef = useRef("");
+  const posRef = useRef(store.pos);
+  posRef.current = store.pos;
   const onDuration = useCallback((d: number) => {
     setDuration(d);
     if (!curId) return;
-    const saved = store.pos[String(curId)];
+    const saved = posRef.current[String(curId)];
     if (!saved || saved.ep !== curEp || resumedRef.current === playKey) return;
     if (saved.t < 10 || saved.t > d - 15) return;
     resumedRef.current = playKey;
     videoRef.current?.seek(saved.t);
     setTime(saved.t);
     toast(`已从上次 ${fmtTime(saved.t)} 继续`, "info");
-  }, [curId, curEp, playKey, store.pos, toast]);
+  }, [curId, curEp, playKey, toast]);
 
   /* 进度落盘：时间每 5s 变一次，交给 store 去抖 */
   const savePosRef = useRef(store.savePos);
@@ -530,27 +541,49 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /** 错误自愈：地址失效（auth_key 过期 / 分片全挂）时，换一条新地址重试一次 */
   const healRef = useRef<Record<string, number>>({});
+  const [reload, setReload] = useState(0);
+  const keyRef = useRef(playKey);
+  keyRef.current = playKey;
+
   const onPlayError = useCallback((m: string, fatal?: boolean) => {
     if (!curId) { setErr(m); return; }
     if (!fatal || (healRef.current[playKey] || 0) >= 1) { setErr(m); return; }
     healRef.current[playKey] = 1;
-    void api.debugLog(`play-heal ${playKey} :: ${m}`);
-    delete playCache.current[playKey];
+    const myKey = playKey;
+    void api.debugLog(`play-heal ${myKey} :: ${m}`);
+    delete playCache.current[myKey];
     fetchPlay(curId, curEp, true)
-      .then((url) => { setErr(""); setPlayUrls((mm) => ({ ...mm, [playKey]: url })); })
-      .catch((e) => setErr((e as Error).message || m));
+      .then((url) => {
+        if (keyRef.current !== myKey) return;
+        setErr("");
+        setPlayUrls((mm) => ({ ...mm, [myKey]: url }));
+        setReload((n) => n + 1);
+      })
+      .catch((e) => {
+        if (keyRef.current !== myKey) return;
+        setErr((e as Error).message || m);
+        setReload((n) => n + 1);
+      });
   }, [curId, curEp, playKey, fetchPlay]);
 
   /** 「重试」按钮：强制重取地址，而不是继续用缓存里的死链 */
   const retryPlay = () => {
     if (!curId) return;
-    delete playCache.current[playKey];
-    healRef.current[playKey] = 0;
+    const myKey = playKey;
+    delete playCache.current[myKey];
+    healRef.current[myKey] = 0;
     setErr("");
-    setWaiting(true);
     fetchPlay(curId, curEp, true)
-      .then((url) => setPlayUrls((m) => ({ ...m, [playKey]: url })))
-      .catch((e) => setErr((e as Error).message || "取播放地址失败"));
+      .then((url) => {
+        if (keyRef.current !== myKey) return;
+        setPlayUrls((m) => ({ ...m, [myKey]: url }));
+        /* 地址可能没变（服务端还没恢复），靠 reload 强制播放器重建 */
+        setReload((n) => n + 1);
+      })
+      .catch((e) => {
+        if (keyRef.current !== myKey) return;
+        setErr((e as Error).message || "取播放地址失败");
+      });
   };
 
   const likeCount = useMemo(() => {
@@ -582,6 +615,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 <div className="absolute inset-0" style={{ touchAction: "pan-y" }}
                   onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
                 <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay muted={muted}
+                  reload={reload}
                   volume={volume} rate={effRate}
                   fit={isDesktop || (vsize.w > 0 && vsize.w > vsize.h) ? "contain" : "cover"}
                   onClick={() => { if (isDesktop) videoRef.current?.toggle(); }}

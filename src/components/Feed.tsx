@@ -309,15 +309,18 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   /* 进度落盘：时间每 5s 变一次，交给 store 去抖 */
   const savePosRef = useRef(store.savePos);
   savePosRef.current = store.savePos;
+  /** 切集瞬间旧视频的 timeupdate 会晚一拍到达，400ms 内不落盘，避免把上一集的秒数写到新集 */
+  const epAtRef = useRef(0);
   const saveProgress = useCallback((t: number) => {
     setTime(t);
-    if (curId && duration > 20) savePosRef.current(curId, curEp, t);
+    if (curId && duration > 20 && performance.now() - epAtRef.current > 400) savePosRef.current(curId, curEp, t);
   }, [curId, curEp, duration]);
 
   /* 切换条目/集数时重置播放状态 */
   useEffect(() => {
     setTime(0); setDuration(0); setBuffered(0); setErr(""); setWaiting(true); setPaused(false); setDescOpen(false);
     setVsize({ w: 0, h: 0 });
+    epAtRef.current = performance.now();
   }, [playKey]);
 
   /* 音量/静音同步 */
@@ -752,7 +755,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               {/* 左下信息：整体下移紧贴进度条，去掉标签/评分行避免挤占画面 */}
               {!fs && (
               <div className={isDesktop ? "desktop-video-meta" : "absolute left-3.5 right-[76px] z-20"}
-                style={isDesktop ? undefined : { bottom: `calc(var(--sab, 0px) + ${bottomInset + 22}px)` }}>
+                style={isDesktop ? undefined : { bottom: `calc(var(--sab, 0px) + ${bottomInset + 28}px)` }}>
                 <div className="flex items-center gap-2">
                   <span className="text-[15px] font-bold text-white tsh truncate">@{meta.author}</span>
                   {episodes.length > 0 && (

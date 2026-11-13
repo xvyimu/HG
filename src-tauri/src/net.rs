@@ -125,17 +125,26 @@ fn build_client(proxy: Option<&str>) -> reqwest::Client {
             Err(e) => note_proxy(&format!("proxy invalid {p}: {e}")),
         }
     }
-    b.build().expect("build http client")
+    /* 不 panic：建客户端失败就退回直连，否则持锁 panic 会毒化 CLIENT 且再无代理可设 */
+    match b.build() {
+        Ok(c) => c,
+        Err(e) => {
+            note_proxy(&format!("client build failed: {e}"));
+            reqwest::Client::new()
+        }
+    }
 }
 
 /// 客户端可重建：应用内改代理后立刻生效，不用重启
+/// 代理来源优先级：环境变量 HGHUB_PROXY → 外部可写文件（非 root）→ 应用私有文件（root）
 pub static CLIENT: Lazy<std::sync::RwLock<reqwest::Client>> = Lazy::new(|| {
     let mut chosen = std::env::var("HGHUB_PROXY").ok().filter(|s| !s.trim().is_empty());
     if chosen.is_none() {
-        for f in [ANDROID_PROXY_FILE, ANDROID_PROXY_FILE_EXT] {
+        for f in [ANDROID_PROXY_FILE_EXT, ANDROID_PROXY_FILE] {
             if let Ok(p) = std::fs::read_to_string(f) {
                 let p = p.trim().to_string();
                 if !p.is_empty() {
+                    note_proxy(&format!("proxy from {f}"));
                     chosen = Some(p);
                     break;
                 }
@@ -159,16 +168,22 @@ pub fn http() -> reqwest::Client {
     }
 }
 
-/// 运行时设置代理：空串 = 直连。立即重建客户端。
+/// 运行时设置代理：空串 = 直连。立即重建客户端；非法地址直接拒绝，不写入状态。
 pub fn set_proxy(p: &str) {
     let v = p.trim();
     let opt = if v.is_empty() { None } else { Some(v.to_string()) };
+    if let Some(s) = opt.as_deref() {
+        if reqwest::Proxy::all(s).is_err() {
+            note_proxy(&format!("proxy rejected (invalid): {s}"));
+            return;
+        }
+    }
+    /* 先在锁外建好，避免持有写锁时做重活 */
+    let client = build_client(opt.as_deref());
     if let Ok(mut w) = PROXY.write() {
         *w = opt.clone();
     }
-    if let Ok(mut w) = CLIENT.write() {
-        *w = build_client(opt.as_deref());
-    }
+    *CLIENT.write().unwrap_or_else(|e| e.into_inner()) = client;
     note_proxy(&format!("proxy set {}", opt.as_deref().unwrap_or("none")));
 }
 
@@ -176,8 +191,9 @@ pub fn current_proxy() -> Option<String> {
     PROXY.read().ok().and_then(|g| g.clone())
 }
 
+/// 应用私有路径（需 root 才能写）
 const ANDROID_PROXY_FILE: &str = "/data/data/com.hghub.huangguo/files/proxy.txt";
-/// 非 root 也能放的路径：文件管理器/电脑传进去即可
+/// 外部可写路径：文件管理器/电脑传进去即可，非 root 可用
 const ANDROID_PROXY_FILE_EXT: &str =
     "/sdcard/Android/data/com.hghub.huangguo/files/proxy.txt";
 

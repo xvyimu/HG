@@ -101,7 +101,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
           backBufferLength: 20,
           capLevelToPlayerSize: true,
           manifestLoadingTimeOut: 10000,
-          manifestLoadingMaxRetry: 3,
+          manifestLoadingMaxRetry: 2,
           levelLoadingMaxRetry: 4,
           fragLoadingMaxRetry: 4,
           fragLoadingTimeOut: 12000,

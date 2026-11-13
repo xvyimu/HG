@@ -26,6 +26,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
         return [...prev, ...list.filter((x) => !seen.has(x.id))];
       });
       setPage(p);
+      setErr("");
       if (!list.length || (res?.pagination && p >= res.pagination.pages)) setDone(true);
     } catch (e) {
       setErr((e as Error).message || "加载失败");
@@ -44,7 +45,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
     <div className="absolute inset-0 bg-black">
       {items.length ? (
         <Feed videoIds={ids} mode="home" active={active} bottomInset={bottomInset}
-          onNearEnd={() => { if (!loading && !done) load(page + 1); }} />
+          onNearEnd={() => { if (!loading && !done && !err) load(page + 1); }} />
       ) : err ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
           <div className="text-white/90 text-[15px] font-medium">连不上黄果服务器</div>

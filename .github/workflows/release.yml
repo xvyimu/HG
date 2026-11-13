@@ -176,6 +176,20 @@ jobs:
               --v4-signing-enabled false \
               --out "$out" "$f"
             "$APKSIGNER" verify --print-certs "$out" | head -3
+            # Diagnostic variants for MIUI/HyperOS install rejection (test only)
+            case "$out" in
+              *arm64*)
+                for v in nov1 nov3; do
+                  if [ "$v" = "nov1" ]; then EXTRA="--v1-signing-enabled false"; else EXTRA="--v3-signing-enabled false"; fi
+                  "$APKSIGNER" sign \
+                    --ks "$KS" --ks-key-alias "$KEY_ALIAS" \
+                    --ks-pass "pass:$STORE_PASSWORD" --key-pass "pass:$KEY_PASSWORD" \
+                    --v4-signing-enabled false $EXTRA \
+                    --out "${out%.apk}_${v}.apk" "$f"
+                  echo "variant $v -> ${out%.apk}_${v}.apk"
+                done
+                ;;
+            esac
             found=$((found+1))
           done
           rm -f "$KS"

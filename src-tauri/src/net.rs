@@ -65,83 +65,58 @@ async fn probe_host(host: &str) -> bool {
     crate::edge::probe(host).await
 }
 
-/// 只处理「本机 / 内网」代理：这是唯一能确定「代理程序没开」的场景。
-/// 远端代理慢、或只在特定线路可用都属正常波动，动它风险大于收益。
-fn is_local_proxy(p: &str) -> bool {
-    let host = p
-        .split("://")
-        .nth(1)
-        .unwrap_or(p)
-        .split(['/', ':'])
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if host.is_empty() {
-        return false;
-    }
-    host == "localhost"
-        || host == "::1"
-        || host == "[::1]"
-        || host.starts_with("127.")
-        || host.starts_with("10.")
-        || host.starts_with("192.168.")
-        || (host.starts_with("172.")
-            && host
-                .split('.')
-                .nth(1)
-                .and_then(|s| s.parse::<u8>().ok())
-                .map(|n| (16..=31).contains(&n))
-                .unwrap_or(false))
+/// 只处理 loopback 代理：127.0.0.1 / localhost / ::1。
+/// 局域网或远端代理的不通可能是「离开了那个网络」，不能据此判死。
+fn is_loopback_proxy(p: &str) -> bool {
+    let raw = p.trim();
+    let with_scheme = if raw.contains("://") { raw.to_string() } else { format!("http://{raw}") };
+    let host = match reqwest::Url::parse(&with_scheme) {
+        Ok(u) => u.host_str().unwrap_or("").to_ascii_lowercase(),
+        Err(_) => return false,
+    };
+    host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" || host.starts_with("127.")
 }
 
-/// 不经当前代理、直接连一次 base（只判连接是否成立，不解析业务）
-async fn direct_reachable() -> bool {
-    let Some(c) = build_client(None) else { return false };
-    match c
-        .get(format!("{}/", base()))
-        .timeout(Duration::from_secs(8))
-        .send()
-        .await
+/// 代理端口探活：TCP 能连上就说明代理程序在跑（不猜、不等 TLS）。
+/// 端口没人监听是「代理程序没开」唯一无歧义的信号，也是唯一会触发回退的情形。
+async fn proxy_port_alive(p: &str) -> Option<bool> {
+    let raw = p.trim();
+    let with_scheme = if raw.contains("://") { raw.to_string() } else { format!("http://{raw}") };
+    let u = reqwest::Url::parse(&with_scheme).ok()?;
+    let host = u.host_str()?;
+    let port = u.port_or_known_default()?;
+    let addr = format!("{host}:{port}");
+    match tokio::time::timeout(
+        Duration::from_millis(1500),
+        tokio::net::TcpStream::connect(&addr),
+    )
+    .await
     {
-        Ok(r) => r.status().as_u16() < 500,
-        Err(_) => false,
+        Ok(Ok(_)) => Some(true),
+        Ok(Err(_)) => Some(false),
+        Err(_) => None, /* 超时＝不确定，不动配置 */
     }
 }
 
-/// 启动自检：残留的本机代理指向已关闭的端口时，回退直连。
-/// 判据刻意保守——连续两次探活失败、直连确认可达、且期间配置没被别人改过，三条同时成立才提交。
+/// 启动自检：本机代理端口没人监听（代理程序没开）且直连确实能用时，回退直连。
+/// 判据只有两条，都不含猜测；任一不成立就保持原配置。
 pub async fn heal_proxy() -> bool {
     let Some(old) = current_proxy() else { return false };
-    if !is_local_proxy(&old) {
+    if !is_loopback_proxy(&old) {
         return false;
     }
-    let mut alive = false;
-    for i in 0..2 {
-        if probe_host(&base()).await {
-            alive = true;
-            break;
-        }
-        if i == 0 {
-            tokio::time::sleep(Duration::from_millis(600)).await;
-        }
-    }
-    if alive {
+    if proxy_port_alive(&old).await != Some(false) {
         return false;
     }
-    if !direct_reachable().await {
-        note_proxy("proxy unreachable but direct also unreachable; keep as is");
-        return false;
-    }
-    if current_proxy().as_deref() != Some(old.as_str()) {
-        note_proxy("proxy changed during heal; skip rollback");
-        return false;
-    }
+    /* 端口关闭：此刻没有请求能通过它，换配置不会打断任何在途流量 */
     set_proxy("");
-    note_proxy(&format!(
-        "local proxy {old} unreachable, rolled back to {}",
-        current_proxy().unwrap_or_else(|| "direct".into())
-    ));
-    true
+    if probe_host(&base()).await {
+        note_proxy(&format!("loopback proxy {old} not listening, switched to direct"));
+        return true;
+    }
+    set_proxy(&old);
+    note_proxy("loopback proxy not listening and direct unusable; kept as is");
+    false
 }
 
 /// 选路：当前线路通就直接用；不通则并发探候选。
@@ -349,8 +324,8 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
         if !resp.status().is_success() {
             let code = resp.status();
             last = format!("HTTP {code}");
-            /* 4xx 是永久性失败（签名过期/权限），重试只会让播放器多等一轮 */
-            if code.as_u16() < 500 {
+            /* 只有确定性失败才短路；403/408/429 这类（签名刚刷新、限流、边缘未生效）值得再试一次 */
+            if matches!(code.as_u16(), 400 | 401 | 404 | 410) {
                 return Err(last);
             }
             if attempt == 0 {

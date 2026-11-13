@@ -16,16 +16,18 @@ pub fn run() {
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&dir);
                 /* 调试用代理：app_data/proxy.txt 写 http://127.0.0.1:7890 即走代理。
-                   只有文件存在且非空时才覆盖；删掉文件要重启进程才回到 env / 外部文件那套来源 */
-                if let Some(cfg) = std::fs::read_to_string(dir.join("proxy.txt"))
+                   只有文件存在且非空时才覆盖；删掉文件要重启进程才回到 env / 外部文件那套来源。
+                   初始化与自检都丢到后台：setup 在窗口创建前跑，别让 TLS 初始化卡在这里 */
+                let cfg = std::fs::read_to_string(dir.join("proxy.txt"))
                     .ok()
                     .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                {
-                    net::set_proxy(&cfg);
-                }
-                /* 后台自检：残留的死代理会自动回退直连，不阻塞首屏 */
-                tauri::async_runtime::spawn(async { net::heal_proxy().await; });
+                    .filter(|s| !s.is_empty());
+                tauri::async_runtime::spawn(async move {
+                    if let Some(c) = cfg {
+                        net::set_proxy(&c);
+                    }
+                    net::heal_proxy().await;
+                });
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }

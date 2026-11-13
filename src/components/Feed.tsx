@@ -29,6 +29,15 @@ const RATES = [1, 1.25, 1.5, 2];
 
 const stripHtml = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 
+/* 网络层报错翻成人话：这类几乎都是代理/VPN 没开或被阻断 */
+function friendlyErr(m: string): string {
+  const s = (m || "").toLowerCase();
+  if (/sending request|connection|timed out|timeout|dns|network|reset|refused|unreachable/.test(s)) {
+    return "连不上服务器，检查网络或代理/VPN";
+  }
+  return m;
+}
+
 export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind = "video", active, bottomInset, onBack, onNearEnd }: Props) {
   const store = useStore();
   const { isLiked, isFav, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, muted, setMuted, volume, setVolume, toast, addHistory, user } = store;
@@ -575,13 +584,12 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /** 错误自愈：地址失效（auth_key 过期 / 分片全挂）时，换一条新地址重试一次 */
   const healRef = useRef<Record<string, number>>({});
-  const [reload, setReload] = useState(0);
-  const keyRef = useRef(playKey);
+  const [reload, setReload] = useState(0);  const keyRef = useRef(playKey);
   keyRef.current = playKey;
 
   const onPlayError = useCallback((m: string, fatal?: boolean) => {
     if (!curId) { setErr(m); return; }
-    if (!fatal || (healRef.current[playKey] || 0) >= 1) { setErr(m); return; }
+    if (!fatal || (healRef.current[playKey] || 0) >= 1) { setErr(friendlyErr(m)); return; }
     healRef.current[playKey] = 1;
     const myKey = playKey;
     void api.debugLog(`play-heal ${myKey} :: ${m}`);
@@ -616,7 +624,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       })
       .catch((e) => {
         if (keyRef.current !== myKey) return;
-        setErr((e as Error).message || "取播放地址失败");
+        setErr(friendlyErr((e as Error).message || "取播放地址失败"));
       });
   };
 

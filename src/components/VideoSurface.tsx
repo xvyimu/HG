@@ -100,11 +100,11 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
           maxMaxBufferLength: 80,
           backBufferLength: 20,
           capLevelToPlayerSize: true,
-          manifestLoadingTimeOut: 20000,
+          manifestLoadingTimeOut: 10000,
           manifestLoadingMaxRetry: 3,
           levelLoadingMaxRetry: 4,
           fragLoadingMaxRetry: 4,
-          fragLoadingTimeOut: 20000,
+          fragLoadingTimeOut: 12000,
         });
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (autoPlay) video.play().catch(() => {});

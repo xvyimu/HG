@@ -11,6 +11,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [err, setErr] = useState("");
   const loadingRef = useRef(false);
 
   const load = useCallback(async (p: number) => {
@@ -27,6 +28,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
       setPage(p);
       if (!list.length || (res?.pagination && p >= res.pagination.pages)) setDone(true);
     } catch (e) {
+      setErr((e as Error).message || "加载失败");
       toast((e as Error).message || "加载失败", "info");
     } finally {
       loadingRef.current = false;
@@ -43,6 +45,14 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
       {items.length ? (
         <Feed videoIds={ids} mode="home" active={active} bottomInset={bottomInset}
           onNearEnd={() => { if (!loading && !done) load(page + 1); }} />
+      ) : err ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
+          <div className="text-white/90 text-[15px] font-medium">连不上黄果服务器</div>
+          <div className="text-white/45 text-[12px] leading-relaxed break-all">{err}</div>
+          <div className="text-white/35 text-[12px]">检查网络；站点需要代理/VPN 才能访问</div>
+          <button className="mt-2 px-5 h-9 rounded-full bg-white/12 text-white/90 text-[13px] pressable"
+            onClick={() => { setErr(""); setDone(false); void load(1); }}>重试</button>
+        </div>
       ) : (
         <div className="absolute inset-0 flex items-center justify-center"><div className="w-9 h-9 spinner" /></div>
       )}

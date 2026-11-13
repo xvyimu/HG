@@ -108,17 +108,7 @@ pub const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.
 
 static PROXY: Lazy<std::sync::RwLock<Option<String>>> = Lazy::new(|| std::sync::RwLock::new(None));
 
-/// 调试用：app_data/proxy.txt 里写代理地址（如 http://127.0.0.1:7890）
-pub fn set_proxy(p: &str) {
-    if p.is_empty() {
-        return;
-    }
-    if let Ok(mut w) = PROXY.write() {
-        *w = Some(p.to_string());
-    }
-}
-
-pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+fn build_client(proxy: Option<&str>) -> reqwest::Client {
     let mut b = reqwest::Client::builder()
         .user_agent(UA)
         .timeout(Duration::from_secs(20))
@@ -126,36 +116,70 @@ pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .gzip(true)
         .brotli(true)
         .pool_idle_timeout(Duration::from_secs(60));
-    /* 代理来源：setup 里读到的 app_data/proxy.txt → 环境变量 → Android 固定路径兜底 */
-    let mut chosen = PROXY.read().ok().and_then(|g| g.clone());
-    if chosen.is_none() {
-        if let Ok(p) = std::env::var("HGHUB_PROXY") {
-            chosen = Some(p);
-        }
-    }
-    if chosen.is_none() {
-        if let Ok(p) = std::fs::read_to_string(ANDROID_PROXY_FILE) {
-            let p = p.trim().to_string();
-            if !p.is_empty() {
-                chosen = Some(p);
-            }
-        }
-    }
-    if let Some(p) = chosen {
-        match reqwest::Proxy::all(&p) {
+    if let Some(p) = proxy {
+        match reqwest::Proxy::all(p) {
             Ok(px) => {
                 b = b.proxy(px);
                 note_proxy(&format!("proxy={p}"));
             }
             Err(e) => note_proxy(&format!("proxy invalid {p}: {e}")),
         }
-    } else {
-        note_proxy("proxy=none");
     }
     b.build().expect("build http client")
+}
+
+/// 客户端可重建：应用内改代理后立刻生效，不用重启
+pub static CLIENT: Lazy<std::sync::RwLock<reqwest::Client>> = Lazy::new(|| {
+    let mut chosen = std::env::var("HGHUB_PROXY").ok().filter(|s| !s.trim().is_empty());
+    if chosen.is_none() {
+        for f in [ANDROID_PROXY_FILE, ANDROID_PROXY_FILE_EXT] {
+            if let Ok(p) = std::fs::read_to_string(f) {
+                let p = p.trim().to_string();
+                if !p.is_empty() {
+                    chosen = Some(p);
+                    break;
+                }
+            }
+        }
+    }
+    if chosen.is_none() {
+        note_proxy("proxy=none");
+    }
+    if let Ok(mut w) = PROXY.write() {
+        *w = chosen.clone();
+    }
+    std::sync::RwLock::new(build_client(chosen.as_deref()))
 });
 
+/// 取当前客户端（内部是 Arc，克隆很便宜）
+pub fn http() -> reqwest::Client {
+    match CLIENT.read() {
+        Ok(g) => g.clone(),
+        Err(e) => e.into_inner().clone(),
+    }
+}
+
+/// 运行时设置代理：空串 = 直连。立即重建客户端。
+pub fn set_proxy(p: &str) {
+    let v = p.trim();
+    let opt = if v.is_empty() { None } else { Some(v.to_string()) };
+    if let Ok(mut w) = PROXY.write() {
+        *w = opt.clone();
+    }
+    if let Ok(mut w) = CLIENT.write() {
+        *w = build_client(opt.as_deref());
+    }
+    note_proxy(&format!("proxy set {}", opt.as_deref().unwrap_or("none")));
+}
+
+pub fn current_proxy() -> Option<String> {
+    PROXY.read().ok().and_then(|g| g.clone())
+}
+
 const ANDROID_PROXY_FILE: &str = "/data/data/com.hghub.huangguo/files/proxy.txt";
+/// 非 root 也能放的路径：文件管理器/电脑传进去即可
+const ANDROID_PROXY_FILE_EXT: &str =
+    "/sdcard/Android/data/com.hghub.huangguo/files/proxy.txt";
 
 /// 调试留痕：CLIENT 初始化时用的代理（写不进就算了）
 fn note_proxy(msg: &str) {
@@ -183,7 +207,7 @@ pub async fn edge(
 pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String> {
     let mut last = String::from("network error");
     for _ in 0..2 {
-        let resp = CLIENT
+        let resp = http()
             .get(url)
             .header("Referer", format!("{}/", base()))
             .timeout(Duration::from_secs(20))

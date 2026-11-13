@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::edge_routes::ROUTES;
-use crate::net::{base, pick_base_ex, CLIENT, UA};
+use crate::net::{base, http, pick_base_ex, UA};
 
 const PROTOCOL: &str = "dx150-edge-v1";
 const MAX_SEQ: u32 = 16384;
@@ -104,7 +104,7 @@ fn path_matches(pattern: &str, path: &str) -> bool {
 
 async fn post(host: &str, scope: &str, body: &Value) -> Result<Value, String> {
     let url = format!("{host}/api/{scope}/request");
-    let resp = CLIENT
+    let resp = http()
         .post(&url)
         .header("Accept", "application/json")
         .header("Referer", format!("{host}/"))

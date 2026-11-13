@@ -356,3 +356,32 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
 pub fn decode_b64(s: &str) -> Option<Vec<u8>> {
     STANDARD.decode(s).ok().or_else(|| URL_SAFE_NO_PAD.decode(s).ok())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_proxy_detection() {
+        /* 只有本机回环才允许被自检动配置 */
+        assert!(is_loopback_proxy("http://127.0.0.1:7890"));
+        assert!(is_loopback_proxy("127.0.0.1:7890"));
+        assert!(is_loopback_proxy("socks5://127.0.0.1:1080"));
+        assert!(is_loopback_proxy("http://localhost:7890"));
+        /* 局域网 / 模拟器宿主 / 远端：一律不碰，离开那个网络不代表代理坏了 */
+        assert!(!is_loopback_proxy("http://10.0.2.2:7891"));
+        assert!(!is_loopback_proxy("http://192.168.1.5:7890"));
+        assert!(is_loopback_proxy("http://[::1]:7890/v1"));
+        /* IPv6 必须带方括号，裸写有歧义，视为不可解析（保守：不动配置） */
+        assert!(!is_loopback_proxy("::1:7890"));
+        assert!(!is_loopback_proxy(""));
+    }
+
+    #[test]
+    fn conn_err_classification() {
+        assert!(is_conn_err("error sending request: connection refused"));
+        assert!(is_conn_err("tcp connect error: os error 10060"));
+        assert!(!is_conn_err("HTTP 404"));
+        assert!(!is_conn_err("登录已过期"));
+    }
+}

@@ -1,5 +1,12 @@
 # 黄果短剧 · 客户端 API 文档（v1）
 
+> ⚠️ **2026-11-12 起站点换了协议核心，本文第 0.2 节及之后的明文信封描述已过时。**
+> 现行实现：`POST /api/{public|dynamic|playback|user}/request` + `dx150-edge-v1` 加密信封
+> （ECDH P-256 握手 → HKDF-SHA256 → AES-256-GCM），代码见 `src-tauri/src/edge.rs` 与 `edge_routes.rs`。
+> 播放地址改为 `POST /api/videos/{id}/episodes/{ep}/playback`，返回 `streams.{main,hevc,preview}`；
+> 旧 `GET /api/videos/{id}/play` 仍 200 但 `video_url` 恒空。改动背景见 `docs/lessons/2026-11-13-playback.md`。
+> 下文保留作为历史参考。
+
 > 面向 HGhub 客户端（Rust + Tauri 2 / Windows + Android）。
 > 全部结论来自真实站点抓取与实测，未做签名逆向，只复用站点自身「浏览器同源请求」的行为。
 

@@ -65,22 +65,83 @@ async fn probe_host(host: &str) -> bool {
     crate::edge::probe(host).await
 }
 
-/// 启动自检：配了代理但代理不通、而直连能通时，自动回退直连。
-/// 场景：调试时留下的 proxy.txt 指向已经关掉的本机代理，会把所有请求（含分片）拖进死端口。
-/// 只有「代理不通 + 直连通」才回退；两条都不通时保持原配置（没有更好的选项）。
+/// 只处理「本机 / 内网」代理：这是唯一能确定「代理程序没开」的场景。
+/// 远端代理慢、或只在特定线路可用都属正常波动，动它风险大于收益。
+fn is_local_proxy(p: &str) -> bool {
+    let host = p
+        .split("://")
+        .nth(1)
+        .unwrap_or(p)
+        .split(['/', ':'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    host == "localhost"
+        || host == "::1"
+        || host == "[::1]"
+        || host.starts_with("127.")
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || (host.starts_with("172.")
+            && host
+                .split('.')
+                .nth(1)
+                .and_then(|s| s.parse::<u8>().ok())
+                .map(|n| (16..=31).contains(&n))
+                .unwrap_or(false))
+}
+
+/// 不经当前代理、直接连一次 base（只判连接是否成立，不解析业务）
+async fn direct_reachable() -> bool {
+    let Some(c) = build_client(None) else { return false };
+    match c
+        .get(format!("{}/", base()))
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+    {
+        Ok(r) => r.status().as_u16() < 500,
+        Err(_) => false,
+    }
+}
+
+/// 启动自检：残留的本机代理指向已关闭的端口时，回退直连。
+/// 判据刻意保守——连续两次探活失败、直连确认可达、且期间配置没被别人改过，三条同时成立才提交。
 pub async fn heal_proxy() -> bool {
     let Some(old) = current_proxy() else { return false };
-    if probe_host(&base()).await {
+    if !is_local_proxy(&old) {
+        return false;
+    }
+    let mut alive = false;
+    for i in 0..2 {
+        if probe_host(&base()).await {
+            alive = true;
+            break;
+        }
+        if i == 0 {
+            tokio::time::sleep(Duration::from_millis(600)).await;
+        }
+    }
+    if alive {
+        return false;
+    }
+    if !direct_reachable().await {
+        note_proxy("proxy unreachable but direct also unreachable; keep as is");
+        return false;
+    }
+    if current_proxy().as_deref() != Some(old.as_str()) {
+        note_proxy("proxy changed during heal; skip rollback");
         return false;
     }
     set_proxy("");
-    if probe_host(&base()).await {
-        note_proxy(&format!("proxy unreachable, fell back to direct: {old}"));
-        return true;
-    }
-    set_proxy(&old);
-    note_proxy("proxy unreachable and direct also unreachable; kept proxy");
-    false
+    note_proxy(&format!(
+        "local proxy {old} unreachable, rolled back to {}",
+        current_proxy().unwrap_or_else(|| "direct".into())
+    ));
+    true
 }
 
 /// 选路：当前线路通就直接用；不通则并发探候选。
@@ -178,7 +239,6 @@ fn client_for(proxy: &Option<String>) -> (Option<String>, reqwest::Client) {
             note_proxy(&format!("proxy build failed, fallback direct: {p}"));
         } else {
             note_proxy(&format!("proxy invalid, fallback direct: {p}"));
-            return (None, client_for(&None).1);
         }
     }
     match build_client(None) {
@@ -287,8 +347,15 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
             }
         };
         if !resp.status().is_success() {
-            last = format!("HTTP {}", resp.status());
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            let code = resp.status();
+            last = format!("HTTP {code}");
+            /* 4xx 是永久性失败（签名过期/权限），重试只会让播放器多等一轮 */
+            if code.as_u16() < 500 {
+                return Err(last);
+            }
+            if attempt == 0 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
             continue;
         }
         let ctype = resp
@@ -300,7 +367,9 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
             Ok(b) => return Ok((ctype, b.to_vec())),
             Err(e) => {
                 last = e.to_string();
-                tokio::time::sleep(Duration::from_millis(250)).await;
+                if attempt == 0 {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
             }
         }
     }

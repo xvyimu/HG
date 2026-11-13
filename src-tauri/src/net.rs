@@ -106,9 +106,36 @@ pub async fn pick_base() -> String {
 
 pub const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-static PROXY: Lazy<std::sync::RwLock<Option<String>>> = Lazy::new(|| std::sync::RwLock::new(None));
+/// 代理与客户端放在同一把锁里：换代理时两者必须同时生效，
+/// 否则会出现「current_proxy 显示走代理、实际请求直连」。（历史上踩过）
+struct Net {
+    proxy: Option<String>,
+    client: reqwest::Client,
+}
 
-fn build_client(proxy: Option<&str>) -> reqwest::Client {
+fn detect_proxy() -> Option<String> {
+    if let Ok(p) = std::env::var("HGHUB_PROXY") {
+        let p = p.trim().to_string();
+        if !p.is_empty() {
+            note_proxy("proxy from env HGHUB_PROXY");
+            return Some(p);
+        }
+    }
+    /* 外部可写文件优先于私有目录：非 root 手机只能改前者 */
+    for f in [ANDROID_PROXY_FILE_EXT, ANDROID_PROXY_FILE] {
+        if let Ok(p) = std::fs::read_to_string(f) {
+            let p = p.trim().to_string();
+            if !p.is_empty() {
+                note_proxy(&format!("proxy from {f}"));
+                return Some(p);
+            }
+        }
+    }
+    note_proxy("proxy=none");
+    None
+}
+
+fn build_client(proxy: Option<&reqwest::Proxy>) -> Option<reqwest::Client> {
     let mut b = reqwest::Client::builder()
         .user_agent(UA)
         .timeout(Duration::from_secs(20))
@@ -116,55 +143,47 @@ fn build_client(proxy: Option<&str>) -> reqwest::Client {
         .gzip(true)
         .brotli(true)
         .pool_idle_timeout(Duration::from_secs(60));
-    if let Some(p) = proxy {
-        match reqwest::Proxy::all(p) {
-            Ok(px) => {
-                b = b.proxy(px);
-                note_proxy(&format!("proxy={p}"));
+    if let Some(px) = proxy {
+        b = b.proxy(px.clone());
+    }
+    b.build().ok()
+}
+
+/// 建不出带代理的客户端就退回直连（并如实记下 proxy=None），
+/// 连直连都建不出来说明本机 TLS/解析器不可用，属于环境级故障，只能 panic 且信息要明确。
+fn client_for(proxy: &Option<String>) -> (Option<String>, reqwest::Client) {
+    if let Some(p) = proxy.as_deref() {
+        if let Ok(px) = reqwest::Proxy::all(p) {
+            if let Some(c) = build_client(Some(&px)) {
+                return (proxy.clone(), c);
             }
-            Err(e) => note_proxy(&format!("proxy invalid {p}: {e}")),
+            note_proxy(&format!("proxy build failed, fallback direct: {p}"));
+        } else {
+            note_proxy(&format!("proxy invalid, fallback direct: {p}"));
+            return (None, client_for(&None).1);
         }
     }
-    /* 不 panic：建客户端失败就退回直连，否则持锁 panic 会毒化 CLIENT 且再无代理可设 */
-    match b.build() {
-        Ok(c) => c,
-        Err(e) => {
-            note_proxy(&format!("client build failed: {e}"));
-            reqwest::Client::new()
+    match build_client(None) {
+        Some(c) => (None, c),
+        None => {
+            note_proxy("client build failed: no usable http stack");
+            panic!("初始化 HTTP 客户端失败：TLS 后端或系统解析器不可用")
         }
     }
 }
 
-/// 客户端可重建：应用内改代理后立刻生效，不用重启
-/// 代理来源优先级：环境变量 HGHUB_PROXY → 外部可写文件（非 root）→ 应用私有文件（root）
-pub static CLIENT: Lazy<std::sync::RwLock<reqwest::Client>> = Lazy::new(|| {
-    let mut chosen = std::env::var("HGHUB_PROXY").ok().filter(|s| !s.trim().is_empty());
-    if chosen.is_none() {
-        for f in [ANDROID_PROXY_FILE_EXT, ANDROID_PROXY_FILE] {
-            if let Ok(p) = std::fs::read_to_string(f) {
-                let p = p.trim().to_string();
-                if !p.is_empty() {
-                    note_proxy(&format!("proxy from {f}"));
-                    chosen = Some(p);
-                    break;
-                }
-            }
-        }
-    }
-    if chosen.is_none() {
-        note_proxy("proxy=none");
-    }
-    if let Ok(mut w) = PROXY.write() {
-        *w = chosen.clone();
-    }
-    std::sync::RwLock::new(build_client(chosen.as_deref()))
+/// 客户端可重建：应用内改代理后立刻生效，不用重启。
+/// 首次读取时的来源优先级：env HGHUB_PROXY → 外部可写文件（非 root）→ 应用私有文件（root）。
+static NET: Lazy<std::sync::RwLock<Net>> = Lazy::new(|| {
+    let (proxy, client) = client_for(&detect_proxy());
+    std::sync::RwLock::new(Net { proxy, client })
 });
 
 /// 取当前客户端（内部是 Arc，克隆很便宜）
 pub fn http() -> reqwest::Client {
-    match CLIENT.read() {
-        Ok(g) => g.clone(),
-        Err(e) => e.into_inner().clone(),
+    match NET.read() {
+        Ok(g) => g.client.clone(),
+        Err(e) => e.into_inner().client.clone(),
     }
 }
 
@@ -178,17 +197,20 @@ pub fn set_proxy(p: &str) {
             return;
         }
     }
-    /* 先在锁外建好，避免持有写锁时做重活 */
-    let client = build_client(opt.as_deref());
-    if let Ok(mut w) = PROXY.write() {
-        *w = opt.clone();
-    }
-    *CLIENT.write().unwrap_or_else(|e| e.into_inner()) = client;
-    note_proxy(&format!("proxy set {}", opt.as_deref().unwrap_or("none")));
+    /* 锁外建好客户端，持锁只做一次赋值 */
+    let (proxy, client) = client_for(&opt);
+    let mut w = NET.write().unwrap_or_else(|e| e.into_inner());
+    w.proxy = proxy.clone();
+    w.client = client;
+    note_proxy(&format!("proxy set {}", proxy.as_deref().unwrap_or("none")));
 }
 
+#[allow(dead_code)] /* 预留给后续代理设置 UI / 诊断用 */
 pub fn current_proxy() -> Option<String> {
-    PROXY.read().ok().and_then(|g| g.clone())
+    match NET.read() {
+        Ok(g) => g.proxy.clone(),
+        Err(e) => e.into_inner().proxy.clone(),
+    }
 }
 
 /// 应用私有路径（需 root 才能写）

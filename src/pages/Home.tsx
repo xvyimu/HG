@@ -13,6 +13,8 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
   const [done, setDone] = useState(false);
   const [err, setErr] = useState("");
   const loadingRef = useRef(false);
+  /* 失败后冷却 3s 再允许自动翻页，避免一次抖动就永久停住，也避免立刻重试刷屏 */
+  const errAtRef = useRef(0);
 
   const load = useCallback(async (p: number) => {
     if (loadingRef.current || done) return;
@@ -29,6 +31,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
       setErr("");
       if (!list.length || (res?.pagination && p >= res.pagination.pages)) setDone(true);
     } catch (e) {
+      errAtRef.current = Date.now();
       setErr((e as Error).message || "加载失败");
       toast((e as Error).message || "加载失败", "info");
     } finally {
@@ -45,7 +48,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
     <div className="absolute inset-0 bg-black">
       {items.length ? (
         <Feed videoIds={ids} mode="home" active={active} bottomInset={bottomInset}
-          onNearEnd={() => { if (!loading && !done && !err) load(page + 1); }} />
+          onNearEnd={() => { if (!loading && !done && (!err || Date.now() - errAtRef.current > 3000)) load(page + 1); }} />
       ) : err ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
           <div className="text-white/90 text-[15px] font-medium">连不上黄果服务器</div>

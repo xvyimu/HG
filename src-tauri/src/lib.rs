@@ -15,13 +15,15 @@ pub fn run() {
         .setup(|app| {
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&dir);
-                /* 调试用代理：app_data/proxy.txt 写 http://127.0.0.1:7890 即走代理；
-                   文件被删掉时显式清空，否则旧代理会一直留在进程里 */
-                let cfg = std::fs::read_to_string(dir.join("proxy.txt"))
+                /* 调试用代理：app_data/proxy.txt 写 http://127.0.0.1:7890 即走代理。
+                   只有文件存在且非空时才覆盖；删掉文件要重启进程才回到 env / 外部文件那套来源 */
+                if let Some(cfg) = std::fs::read_to_string(dir.join("proxy.txt"))
                     .ok()
                     .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-                net::set_proxy(cfg.as_deref().unwrap_or(""));
+                    .filter(|s| !s.is_empty())
+                {
+                    net::set_proxy(&cfg);
+                }
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }

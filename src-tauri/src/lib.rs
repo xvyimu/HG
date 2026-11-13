@@ -24,6 +24,8 @@ pub fn run() {
                 {
                     net::set_proxy(&cfg);
                 }
+                /* 后台自检：残留的死代理会自动回退直连，不阻塞首屏 */
+                tauri::async_runtime::spawn(async { net::heal_proxy().await; });
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }

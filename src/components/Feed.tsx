@@ -31,7 +31,7 @@ const stripHtml = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, "
 
 /* 网络层报错翻成人话：这类几乎都是代理/VPN 没开或被阻断；保留原文便于排障，但抹掉 URL（含签名参数） */
 function friendlyErr(m: string): string {
-  const raw = (m || "").trim().replace(/https?:\/\/\S+/gi, "<url>");
+  const raw = (m || "").trim().replace(/https?:\/\/[^\s()（）,，]+/gi, "<url>");
   const s = raw.toLowerCase();
   if (/sending request|connection|timed out|timeout|dns|network|reset|refused|unreachable/.test(s)) {
     return raw && raw.length < 120 ? `连不上服务器，检查网络或代理/VPN（${raw}）` : "连不上服务器，检查网络或代理/VPN";

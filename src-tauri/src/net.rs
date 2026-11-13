@@ -65,6 +65,24 @@ async fn probe_host(host: &str) -> bool {
     crate::edge::probe(host).await
 }
 
+/// 启动自检：配了代理但代理不通、而直连能通时，自动回退直连。
+/// 场景：调试时留下的 proxy.txt 指向已经关掉的本机代理，会把所有请求（含分片）拖进死端口。
+/// 只有「代理不通 + 直连通」才回退；两条都不通时保持原配置（没有更好的选项）。
+pub async fn heal_proxy() -> bool {
+    let Some(old) = current_proxy() else { return false };
+    if probe_host(&base()).await {
+        return false;
+    }
+    set_proxy("");
+    if probe_host(&base()).await {
+        note_proxy(&format!("proxy unreachable, fell back to direct: {old}"));
+        return true;
+    }
+    set_proxy(&old);
+    note_proxy("proxy unreachable and direct also unreachable; kept proxy");
+    false
+}
+
 /// 选路：当前线路通就直接用；不通则并发探候选。
 /// `skip_cur` 用于「刚才就是这条线路连不上」的场景，省掉一次必然失败的探测。
 pub async fn pick_base_ex(skip_cur: bool) -> String {
@@ -199,10 +217,13 @@ pub fn set_proxy(p: &str) {
     }
     /* 锁外建好客户端，持锁只做一次赋值 */
     let (proxy, client) = client_for(&opt);
-    let mut w = NET.write().unwrap_or_else(|e| e.into_inner());
-    w.proxy = proxy.clone();
-    w.client = client;
-    note_proxy(&format!("proxy set {}", proxy.as_deref().unwrap_or("none")));
+    let msg = format!("proxy set {}", proxy.as_deref().unwrap_or("none"));
+    {
+        let mut w = NET.write().unwrap_or_else(|e| e.into_inner());
+        w.proxy = proxy;
+        w.client = client;
+    } /* 先放锁：http() 在每次请求/每张封面/每个分片都要拿读锁，别让写磁盘卡在锁里 */
+    note_proxy(&msg);
 }
 
 #[allow(dead_code)] /* 预留给后续代理设置 UI / 诊断用 */
@@ -219,15 +240,18 @@ const ANDROID_PROXY_FILE: &str = "/data/data/com.hghub.huangguo/files/proxy.txt"
 const ANDROID_PROXY_FILE_EXT: &str =
     "/sdcard/Android/data/com.hghub.huangguo/files/proxy.txt";
 
-/// 调试留痕：CLIENT 初始化时用的代理（写不进就算了）
+/// 调试留痕：代理相关决策（写不进就算了）
 fn note_proxy(msg: &str) {
+    use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open("/data/data/com.hghub.huangguo/files/proxy.log")
     {
-        use std::io::Write;
         let _ = writeln!(f, "{msg}");
+    } else {
+        /* 桌面端没有 Android 私有目录，降级到 stderr，别让诊断线索凭空消失 */
+        eprintln!("[proxy] {msg}");
     }
 }
 
@@ -243,15 +267,25 @@ pub async fn edge(
 
 /// 拉原始字节（图片 / m3u8 / 分片）。
 pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String> {
-    let mut last = String::from("network error");
-    for _ in 0..2 {
-        let resp = http()
+    let mut last = String::from("network error"); /* 只有全失败才用得上 */
+    for attempt in 0..2 {
+        let sent = http()
             .get(url)
             .header("Referer", format!("{}/", base()))
             .timeout(Duration::from_secs(20))
             .send()
-            .await
-            .map_err(|e| format!("error sending request: {e}"))?;
+            .await;
+        let resp = match sent {
+            Ok(r) => r,
+            Err(e) => {
+                /* 连接层失败也值得再试一次：代理刚起来 / 线路刚切换时会命中一次 */
+                last = format!("error sending request: {e}");
+                if attempt == 0 {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                continue;
+            }
+        };
         if !resp.status().is_success() {
             last = format!("HTTP {}", resp.status());
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -262,8 +296,13 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
-        return Ok((ctype, bytes));
+        match resp.bytes().await {
+            Ok(b) => return Ok((ctype, b.to_vec())),
+            Err(e) => {
+                last = e.to_string();
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
     }
     Err(last)
 }
